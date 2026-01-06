@@ -26,13 +26,12 @@ else()
     endif()
 endif()
 
-# 2. Blake3 (Advanced SIMD Flag Management)
+# 2. Blake3
 set(BLAKE3_SOURCES
     libs/blake3/c/blake3.c 
     libs/blake3/c/blake3_dispatch.c 
     libs/blake3/c/blake3_portable.c
 )
-
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
     list(APPEND BLAKE3_SOURCES
         libs/blake3/c/blake3_sse2.c
@@ -40,22 +39,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AM
         libs/blake3/c/blake3_avx2.c
         libs/blake3/c/blake3_avx512.c
     )
-    add_library(blake3 STATIC ${BLAKE3_SOURCES})
-    
-    # Apply specific flags to specific files to avoid "option mismatch"
     set_source_files_properties(libs/blake3/c/blake3_sse2.c PROPERTIES COMPILE_FLAGS "-msse2")
     set_source_files_properties(libs/blake3/c/blake3_sse41.c PROPERTIES COMPILE_FLAGS "-msse4.1")
     set_source_files_properties(libs/blake3/c/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
-    # AVX512 requires multiple flags for VL (Vector Length) support used in blake3
     set_source_files_properties(libs/blake3/c/blake3_avx512.c PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512vl -mavx512bw -mavx512dq")
-
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
     list(APPEND BLAKE3_SOURCES libs/blake3/c/blake3_neon.c)
-    add_library(blake3 STATIC ${BLAKE3_SOURCES})
-else()
-    add_library(blake3 STATIC ${BLAKE3_SOURCES})
 endif()
-
+add_library(blake3 STATIC ${BLAKE3_SOURCES})
 target_include_directories(blake3 PUBLIC libs/blake3/c)
 
 # 3. Tenstorrent Metal
@@ -67,16 +58,20 @@ if(ENABLE_TT)
     link_directories(/opt/tt-metal/build/lib)
 endif()
 
-# 4. Source Files
+# --- TARGET A: The Miner ---
 add_executable(hardhack_miner 
     src/main.cpp 
     src/miner.cpp 
     src/compute_cpu.cpp
 )
-
 if(ENABLE_TT)
     target_sources(hardhack_miner PRIVATE src/compute_tt.cpp)
     target_link_libraries(hardhack_miner PRIVATE tt_metal)
 endif()
-
 target_link_libraries(hardhack_miner PRIVATE blake3 pthread dl)
+
+# --- TARGET B: The Succinct Prover ---
+add_executable(hardhack_prover 
+    src/prover_main.cpp 
+)
+target_link_libraries(hardhack_prover PRIVATE blake3 pthread dl)

@@ -25,7 +25,7 @@ MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_b
     blake3_hasher_init(&base_hasher);
     blake3_hasher_update(&base_hasher, seed_template.data(), 228);
 
-    MiningResult final_res = {false, {}, {}, 0, max_iterations};
+    MiningResult final_res = {false, {}, {}, 0, 0};
     bool found_global = false;
 
     #pragma omp parallel
@@ -45,12 +45,8 @@ MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_b
         for (uint64_t i = 0; i < (max_iterations / num_threads) && !found_global; ++i) {
             (*nonce_ptr)++;
 
-            // Incremental hash
             std::memcpy(&thread_hasher, &base_hasher, sizeof(blake3_hasher));
             blake3_hasher_update(&thread_hasher, &local_seed[228], 12);
-            
-            // XOF generation is the bottleneck. We generate it in one call here, 
-            // but the C++ threads are already parallelized via OMP.
             blake3_hasher_finalize(&thread_hasher, xof_buf.data(), xof_buf.size());
             
             device_->matmul(xof_buf.data(), xof_buf.data() + (M * K), local_C.data());
@@ -68,11 +64,14 @@ MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_b
                         found_global = true;
                         final_res.success = true;
                         final_res.nonce = std::vector<uint8_t>(local_seed.end() - 12, local_seed.end());
+                        final_res.solution = local_seed;
+                        final_res.solution.insert(final_res.solution.end(), local_C.begin(), local_C.end());
                         final_res.iterations = i * num_threads;
                     }
                 }
             }
         }
+        if (!found_global && thread_id == 0) final_res.iterations = max_iterations;
     }
 
     auto end = std::chrono::high_resolution_clock::now();
