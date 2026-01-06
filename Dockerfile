@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y \
     libopenblas-dev \
     libyaml-cpp-dev \
     nlohmann-json3-dev \
-    libfmt-dev \
     libspdlog-dev \
     python3 \
     python3-pip \
@@ -30,6 +29,13 @@ RUN git clone https://github.com/tenstorrent/ronin.git /opt/ronin
 
 # Clone tt-logger
 RUN git clone https://github.com/tenstorrent/tt-logger.git /opt/tt-logger
+
+# Clone and install fmt v10+ (Ubuntu 22.04 has v8)
+RUN git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git /opt/fmt \
+    && cd /opt/fmt \
+    && mkdir build && cd build \
+    && cmake .. -DFMT_TEST=OFF \
+    && make -j$(nproc) && make install
 
 # FIX: Create symlink for <reflect> -> reflect.hpp
 # The code expects <reflect> but the file is likely reflect.hpp
