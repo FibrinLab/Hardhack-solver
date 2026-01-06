@@ -1,5 +1,5 @@
-# Use the official Tenstorrent Metalium release image
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+# Use the official Tenstorrent Metalium DEV image (contains headers)
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
 
 # Ensure we have build tools and python
 USER root
@@ -21,20 +21,12 @@ RUN apt-get update && apt-get install -y \
 # Install python dependencies
 RUN python3 -m pip install --ignore-installed requests flask
 
-# Clone tt-metal to ensure we have headers (recursive for submodules)
-RUN git clone --depth 1 --recursive https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
-
 WORKDIR /app
 
 # Copy project
 COPY . .
 
 # Build
-RUN find /opt -name reflect || true
-RUN find /opt -name reflect.hpp || true
-# Hack: Link reflect.hpp to reflect if needed
-RUN find /opt -name reflect.hpp -exec ln -s {} /usr/include/reflect \; || true
-
 RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
     make -j$(nproc)
