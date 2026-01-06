@@ -23,8 +23,10 @@ RUN apt-get update && apt-get install -y \
 RUN python3 -m pip install --ignore-installed requests flask pyyaml mako
 
 # Clone tt-metal recursively
-# We clone to /opt/tt-metal
 RUN git clone --recursive https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
+
+# Clone ronin (contains reflect)
+RUN git clone https://github.com/tenstorrent/ronin.git /opt/ronin
 
 # Debug: List the structure so we know where headers are
 RUN ls -R /opt/tt-metal/tt_metal/include || true

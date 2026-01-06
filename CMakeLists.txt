@@ -30,6 +30,8 @@ if(ENABLE_TT)
         /opt/tt-metal/tt_metal/api/tt-metalium
         /opt/tt-metal/tt_stl
         /opt/tt-metal/tt_stl/tt_stl
+        /opt/ronin/jitte/src/tt_metal/tt_stl/reflect
+        /opt/ronin/include
         /usr/local/include
     )
     link_directories(/opt/tt-metal/lib /usr/local/lib)
