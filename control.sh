@@ -28,7 +28,8 @@ case "$1" in
         ;;
     mine)
         echo "[*] Running single benchmark (1000 iterations)..."
-        curl -s -X POST "$BASE_URL/mine" -d '{"iterations": 1000}' | python3 -m json.tool
+        curl -s -X POST "$BASE_URL/mine" -d '{"iterations": 1000}'
+        echo ""
         ;;
     help|--help|-h)
         usage
