@@ -23,7 +23,7 @@ option(BLAKE3_FETCH_TBB "Allow fetching oneTBB from GitHub if not found on syste
 include(CTest)
 include(FeatureSummary)
 include(GNUInstallDirs)
-include(BLAKE3/Utils)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BLAKE3/Utils.cmake")
 
 add_subdirectory(dependencies)
 
@@ -369,8 +369,8 @@ add_feature_info("oneTBB parallelism" BLAKE3_USE_TBB "The library uses oneTBB pa
 feature_summary(WHAT ENABLED_FEATURES)
 
 if(BLAKE3_EXAMPLES)
-  include(BLAKE3/Examples)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BLAKE3/Examples.cmake")
 endif()
 if(BLAKE3_TESTING)
-  include(BLAKE3/Testing)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/BLAKE3/Testing.cmake")
 endif()
