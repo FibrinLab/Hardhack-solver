@@ -28,6 +28,10 @@ RUN git clone --recursive https://github.com/tenstorrent/tt-metal.git /opt/tt-me
 # Clone ronin (contains reflect)
 RUN git clone https://github.com/tenstorrent/ronin.git /opt/ronin
 
+# FIX: Create symlink for <reflect> -> reflect.hpp
+# The code expects <reflect> but the file is likely reflect.hpp
+RUN find /opt/ronin -name reflect.hpp -exec ln -s {} /usr/include/reflect \;
+
 # Debug: List the structure so we know where headers are
 RUN ls -R /opt/tt-metal/tt_metal/include || true
 RUN ls -R /opt/tt-metal/tt_stl || true
