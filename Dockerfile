@@ -1,23 +1,36 @@
-# Production Tenstorrent Base Image
-FROM ghcr.io/tenstorrent/tt-xla/tt-xla-ird-ubuntu-22-04:latest
+FROM ubuntu:22.04
 
-USER root
+# Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install curl for API communication
+# 1. Install Essential Build Tools & Dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential cmake git curl openssl \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    xxd \
+    libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
 
-# Build high-performance binary
+# 2. Copy source code and libraries
+COPY CMakeLists.txt .
+COPY include/ include/
+COPY src/ src/
+COPY libs/ libs/
+
+# 3. Build the Miner and Prover (Production Release)
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=OFF -DDISABLE_AVX512=ON && \
     make -j$(nproc)
 
-RUN chmod +x testnet_agent.sh
+# 4. Copy and prepare the execution scripts
+COPY mine.sh .
+COPY prove.sh .
+RUN chmod +x mine.sh prove.sh
 
-ENV TT_METAL_HOME=/opt/tt-metal
-ENTRYPOINT ["./testnet_agent.sh"]
+# Set the default entry point to the Miner
+# You can override this to ./prove.sh in Koyeb if needed
+ENTRYPOINT ["./mine.sh"]
