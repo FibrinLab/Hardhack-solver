@@ -37,6 +37,9 @@ RUN git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git /opt/f
     && cmake .. -DFMT_TEST=OFF \
     && make -j$(nproc) && make install
 
+# Hack: Force symlink fmt headers to /usr/include to ensure compiler finds v10
+RUN rm -rf /usr/include/fmt && ln -s /opt/fmt/include/fmt /usr/include/fmt
+
 # FIX: Create symlink for <reflect> -> reflect.hpp
 # The code expects <reflect> but the file is likely reflect.hpp
 RUN find /opt/ronin -name reflect.hpp -exec ln -s {} /usr/include/reflect \;
