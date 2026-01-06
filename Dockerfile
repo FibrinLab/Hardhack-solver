@@ -31,6 +31,10 @@ COPY . .
 
 # Build
 RUN find /opt -name reflect || true
+RUN find /opt -name reflect.hpp || true
+# Hack: Link reflect.hpp to reflect if needed
+RUN find /opt -name reflect.hpp -exec ln -s {} /usr/include/reflect \; || true
+
 RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
     make -j$(nproc)
