@@ -1,7 +1,7 @@
 # Use the Tenstorrent base image as suggested
 FROM ghcr.io/tenstorrent/tt-xla/tt-xla-ird-ubuntu-22-04:latest
 
-# Ensure we have build tools
+# Ensure we have build tools and python
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -10,7 +10,12 @@ RUN apt-get update && apt-get install -y \
     cmake \
     git \
     libopenblas-dev \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install python dependencies
+RUN pip3 install requests
 
 WORKDIR /app
 
@@ -23,5 +28,5 @@ RUN mkdir build && cd build && \
     make -j$(nproc)
 
 # Entry point
-ENTRYPOINT ["./build/hardhack_miner"]
-CMD ["-n", "1000"]
+ENTRYPOINT ["python3", "miner_agent.py"]
+CMD ["--loop"]
