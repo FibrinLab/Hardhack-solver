@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y \
 # Install python dependencies
 RUN python3 -m pip install --ignore-installed requests flask
 
-# Clone tt-metal to ensure we have headers
-RUN git clone --depth 1 https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
+# Clone tt-metal to ensure we have headers (recursive for submodules)
+RUN git clone --depth 1 --recursive https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ WORKDIR /app
 COPY . .
 
 # Build
-RUN find /opt /usr -name host_api.hpp || true
+RUN find /opt -name reflect || true
 RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
     make -j$(nproc)
