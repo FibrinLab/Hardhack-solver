@@ -18,6 +18,9 @@ RUN apt-get update && apt-get install -y \
 # Install python dependencies
 RUN python3 -m pip install --ignore-installed requests flask
 
+# Clone tt-metal to ensure we have headers
+RUN git clone --depth 1 https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
+
 WORKDIR /app
 
 # Copy project

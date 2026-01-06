@@ -22,13 +22,10 @@ if(ENABLE_TT)
     
     # Try to find headers in standard locations or /opt/tt-metal
     include_directories(
-        /opt/tt-metal/include
-        /opt/tt-metal/src
         /opt/tt-metal
+        /opt/tt-metal/tt_metal/include
+        /opt/tt-metal/tt_metal/hw/inc
         /usr/local/include
-        /usr/local/tt-metal/include
-        /home/user/tt-metal/src
-        /home/user/tt-metal
     )
     link_directories(/opt/tt-metal/lib /usr/local/lib)
 
