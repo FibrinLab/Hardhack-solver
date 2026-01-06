@@ -45,7 +45,37 @@ make -j$(nproc)
 
 ## Running the Miner
 
-Execute the binary with the desired number of iterations.
+### 1. Using the Control Script (Recommended)
+We provide a helper script for easy interaction.
+```bash
+# Start background mining loop
+./control.sh start
+
+# Run a single benchmark (1000 iterations)
+./control.sh mine
+
+# Check status
+./control.sh status
+
+# Stop mining
+./control.sh stop
+```
+
+### 2. Manual Commands
+You can also use `curl` or `python3` directly.
+
+**Start Background Loop:**
+```bash
+curl -X POST http://localhost:8000/start
+```
+
+**Run Single Benchmark (Python one-liner):**
+```bash
+python3 -c "import requests; print(requests.post('http://localhost:8000/mine', json={'iterations': 1000}).text)"
+```
+
+### 3. CLI Direct Mode (Legacy)
+Execute the binary directly (useful for debugging).
 
 ```bash
 # Basic run (1000 iterations)
