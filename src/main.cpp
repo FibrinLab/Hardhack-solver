@@ -2,35 +2,37 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <algorithm>
 #include "miner.h"
 #include "compute.h"
 
-// Base58 Alphabet
+// Real Base58 Implementation
 const char* B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-std::string to_base58(const std::vector<uint8_t>& data) {
+std::string encode_base58(const std::vector<uint8_t>& data) {
     std::vector<uint8_t> digits(data.size() * 138 / 100 + 1, 0);
-    size_t size = 0;
-    for (uint8_t b : data) {
-        int carry = b;
-        for (size_t i = 0; i < size || carry; ++i) {
-            carry += 58 * digits[i];
-            digits[i] = carry % 256;
-            carry /= 256;
-            size = std::max(size, i + 1);
+    size_t digits_len = 1;
+    for (uint8_t byte : data) {
+        uint32_t carry = byte;
+        for (size_t i = 0; i < digits_len; i++) {
+            carry += (uint32_t)digits[i] << 8;
+            digits[i] = (uint8_t)(carry % 58);
+            carry /= 58;
+        }
+        while (carry) {
+            digits[digits_len++] = (uint8_t)(carry % 58);
+            carry /= 58;
         }
     }
-    std::string res;
-    for (uint8_t b : data) if (b == 0) res += B58_ALPHABET[0]; else break;
-    for (size_t i = size; i-- > 0; ) {
-        int carry = digits[i];
-        for (size_t j = 0; j < res.size() || carry; ++j) {
-            // This is a simplified B58, for the competition we use a standard lib-style approach
-        }
+    std::string res = "";
+    for (uint8_t byte : data) {
+        if (byte == 0) res += B58_ALPHABET[0];
+        else break;
     }
-    // For the sake of the competition, we'll output raw hex and use 'openssl' or 'xxd' in bash 
-    // to handle the binary POST which is the organizers' preferred method.
-    return ""; 
+    for (size_t i = 0; i < digits_len; i++) {
+        res += B58_ALPHABET[digits[digits_len - 1 - i]];
+    }
+    return res;
 }
 
 std::vector<uint8_t> hex_to_bytes(const std::string& hex) {
@@ -79,11 +81,13 @@ int main(int argc, char* argv[]) {
 
     double hps = (res.duration_ms > 0) ? (res.iterations / (res.duration_ms / 1000.0)) : 0;
 
+    // Output JSON
     std::cout << "{"
               << "\"found\": " << (res.success ? "true" : "false") << ", "
               << "\"iterations\": " << res.iterations << ", "
               << "\"hashes_per_sec\": " << hps << ", "
-              << "\"solution_hex\": \"" << (res.success ? bytes_to_hex(res.solution) : "") << "\""
+              << "\"solution_hex\": \"" << (res.success ? bytes_to_hex(res.solution) : "") << "\", "
+              << "\"solution_b58\": \"" << (res.success ? encode_base58(res.solution) : "") << "\""
               << "}" << std::endl;
 
     return 0;

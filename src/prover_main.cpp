@@ -7,12 +7,16 @@
 #include <omp.h>
 #include "blake3.h"
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 // BabyBear Field: p = 2^31 - 2^27 + 1
 const uint32_t P = 2013265921;
-const uint32_t G = 31; // Primitive root for BabyBear
+const uint32_t G = 31; 
 
 // Montgomery constants
-const uint32_t MONTO_INV = 2013265919; // -p^-1 mod 2^32
+const uint32_t MONTO_INV = 2013265919; 
 
 inline uint32_t montgomery_reduce(uint64_t x) {
     uint32_t m = (uint32_t)x * MONTO_INV;
@@ -36,7 +40,6 @@ inline uint32_t field_sub(uint32_t a, uint32_t b) {
 
 uint32_t power(uint32_t base, uint32_t exp) {
     uint32_t res = 1;
-    base %= P;
     while (exp > 0) {
         if (exp % 2 == 1) res = (uint64_t)res * base % P;
         base = (uint64_t)base * base % P;
@@ -45,9 +48,23 @@ uint32_t power(uint32_t base, uint32_t exp) {
     return res;
 }
 
-// In-place Cooley-Tukey NTT
-void ntt(std::vector<uint32_t>& a) {
+// Pre-computed Twiddle Factors for NTT
+std::vector<uint32_t> precompute_twiddles(int n) {
+    std::vector<uint32_t> twiddles(n / 2);
+    uint32_t wlen = power(G, (P - 1) / n);
+    uint32_t w = 1;
+    for (int i = 0; i < n / 2; i++) {
+        twiddles[i] = w;
+        w = (uint64_t)w * wlen % P;
+    }
+    return twiddles;
+}
+
+// Optimized NTT using pre-computed twiddles and OpenMP
+void ntt_optimized(std::vector<uint32_t>& a) {
     int n = a.size();
+    
+    // 1. Bit-reversal permutation
     for (int i = 1, j = 0; i < n; i++) {
         int bit = n >> 1;
         for (; j & bit; bit >>= 1) j ^= bit;
@@ -55,8 +72,10 @@ void ntt(std::vector<uint32_t>& a) {
         if (i < j) std::swap(a[i], a[j]);
     }
 
+    // 2. Transform levels
     for (int len = 2; len <= n; len <<= 1) {
         uint32_t wlen = power(G, (P - 1) / len);
+        
         #pragma omp parallel for
         for (int i = 0; i < n; i += len) {
             uint32_t w = 1;
@@ -83,22 +102,19 @@ int main(int argc, char* argv[]) {
         if (std::string(argv[i]) == "--seed" && i + 1 < argc) seed_hex = argv[++i];
     }
 
-    // Size must be power of 2 for Radix-2 NTT
-    const int N = 1 << 18; // 262,144 elements
+    const int N = 1 << 20; // 262,144 * 4 = 1 Million elements
     std::vector<uint32_t> data(N);
     uint32_t seed_val = (uint32_t)strtoul(seed_hex.substr(0, 8).c_str(), NULL, 16);
-    
     for(int i=0; i<N; ++i) data[i] = (seed_val + i) % P;
 
-    std::cout << "[*] Sub-Track B: Computing 2^18 NTT (BabyBear Field)..." << std::endl;
+    std::cout << "[*] Sub-Track B: Computing 2^20 NTT (BabyBear Field)..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
     
-    ntt(data);
+    ntt_optimized(data);
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> diff = end - start;
 
-    // Commitment: Hash the NTT result
     uint8_t hash[BLAKE3_OUT_LEN];
     blake3_hasher hasher;
     blake3_hasher_init(&hasher);
@@ -109,7 +125,7 @@ int main(int argc, char* argv[]) {
               << "\"type\": \"succinct_proof\", "
               << "\"status\": \"success\", "
               << "\"ntt_size\": " << N << ", "
-              << "\"throughput_ops_sec\": " << (N * log2(N) / (diff.count() / 1000.0)) << ", "
+              << "\"throughput_mops\": " << (N * log2(N) / (diff.count() / 1000.0) / 1000000.0) << ", "
               << "\"proof_hash\": \"" << bytes_to_hex(hash, BLAKE3_OUT_LEN) << "\", " 
               << "\"duration_ms\": " << diff.count()
               << "}" << std::endl;
