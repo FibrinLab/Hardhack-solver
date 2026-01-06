@@ -31,17 +31,14 @@ RUN git clone https://github.com/tenstorrent/ronin.git /opt/ronin
 RUN git clone https://github.com/tenstorrent/tt-logger.git /opt/tt-logger
 
 # Clone and install fmt v10+ (Ubuntu 22.04 has v8)
+# Install to /usr to ensure it overrides system fmt
 RUN git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git /opt/fmt \
     && cd /opt/fmt \
     && mkdir build && cd build \
-    && cmake .. -DFMT_TEST=OFF \
+    && cmake .. -DFMT_TEST=OFF -DCMAKE_INSTALL_PREFIX=/usr \
     && make -j$(nproc) && make install
 
-# Hack: Force symlink fmt headers to /usr/include to ensure compiler finds v10
-RUN rm -rf /usr/include/fmt && ln -s /opt/fmt/include/fmt /usr/include/fmt
-
-# FIX: Create symlink for <reflect> -> reflect.hpp
-# The code expects <reflect> but the file is likely reflect.hpp
+# Hack: Link reflect.hpp to reflect if needed
 RUN find /opt/ronin -name reflect.hpp -exec ln -s {} /usr/include/reflect \;
 
 # Debug: List the structure so we know where headers are
