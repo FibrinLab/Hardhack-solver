@@ -67,7 +67,8 @@ def mine_once():
     """
     Trigger a single mining run manually.
     """
-    data = request.get_json() or {}
+    # Accept data even if Content-Type header is missing
+    data = request.get_json(force=True, silent=True) or {}
     iterations = data.get('iterations', 1000)
     result = run_miner(iterations)
     return jsonify(result)
