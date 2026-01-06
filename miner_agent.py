@@ -2,64 +2,27 @@ import argparse
 import subprocess
 import json
 import time
-import requests
 import os
-import sys
+import threading
+from flask import Flask, jsonify, request
 
 # Configuration
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000") # Replace with real endpoint
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 MINER_BINARY = "./build/hardhack_miner"
+PORT = int(os.environ.get("PORT", 8000))
 
-def get_workload():
-    """
-    Fetches the next workload from the API.
-    Mocks the response for now.
-    """
-    print(f"[*] Requesting workload from {API_BASE_URL}/workload...")
-    try:
-        # response = requests.get(f"{API_BASE_URL}/workload")
-        # response.raise_for_status()
-        # return response.json()
-        
-        # MOCK RESPONSE
-        return {
-            "id": "job_12345",
-            "matrix_size": 512,
-            "iterations": 500,
-            "precision": "fp32"
-        }
-    except Exception as e:
-        print(f"[!] Error fetching workload: {e}")
-        return None
+app = Flask(__name__)
 
-def submit_result(workload_id, metrics):
-    """
-    Submits the benchmark result to the API.
-    """
-    payload = {
-        "workload_id": workload_id,
-        "metrics": metrics
-    }
-    print(f"[*] Submitting results for {workload_id}...")
-    print(f"    Payload: {json.dumps(payload, indent=2)}")
-    
-    try:
-        # response = requests.post(f"{API_BASE_URL}/submit", json=payload)
-        # response.raise_for_status()
-        # return response.json()
-        
-        # MOCK RESPONSE
-        return {"status": "accepted", "score": 98.5}
-    except Exception as e:
-        print(f"[!] Error submitting result: {e}")
-        return None
+# Global state for background loop
+mining_active = False
 
-def run_miner(matrix_size, iterations):
+def run_miner(iterations):
     """
     Executes the C++ miner binary and captures the output.
     """
-    cmd = [MINER_BINARY, "-s", str(matrix_size), "-n", str(iterations), "--json"]
-    print(f"[*] Running miner: {' '.join(cmd)}")
+    # FIX: Removed "-s" argument as the C++ binary does not support it
+    cmd = [MINER_BINARY, "-n", str(iterations), "--json"]
+    print(f"[*] Running miner: {" ".join(cmd)}")
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -70,37 +33,75 @@ def run_miner(matrix_size, iterations):
     except subprocess.CalledProcessError as e:
         print(f"[!] Miner execution failed: {e}")
         print(f"    Stderr: {e.stderr}")
-        return None
+        return {"error": "Execution failed", "stderr": e.stderr}
     except json.JSONDecodeError as e:
         print(f"[!] Failed to parse miner output: {e}")
         print(f"    Raw output: {result.stdout}")
-        return None
+        return {"error": "JSON parse error", "raw": result.stdout}
 
-def main():
-    parser = argparse.ArgumentParser(description="Hard Hack Miner Agent")
-    parser.add_argument("--loop", action="store_true", help="Run in a continuous loop")
-    args = parser.parse_args()
-
-    while True:
-        workload = get_workload()
-        if not workload:
-            print("[!] No workload received. Retrying in 5s...")
-            time.sleep(5)
-            continue
-
-        print(f"[*] Received Workload: {workload['id']} (Size: {workload['matrix_size']}x{workload['matrix_size']})")
-        
-        metrics = run_miner(workload['matrix_size'], workload['iterations'])
-        
-        if metrics:
-            result = submit_result(workload['id'], metrics)
-            if result:
-                print(f"[*] Submission accepted! Score: {result.get('score')}")
-        
-        if not args.loop:
-            break
-        
+def mining_loop():
+    global mining_active
+    print("[*] Background mining loop started.")
+    while mining_active:
+        # Mock workload fetch
+        iterations = 1000 
+        print(f"[*] Processing batch of {iterations}...")
+        metrics = run_miner(iterations)
+        print(f"[*] Result: {metrics}")
         time.sleep(1)
 
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "online",
+        "mining_active": mining_active,
+        "endpoints": ["/health", "/mine", "/start", "/stop"]
+    })
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
+
+@app.route('/mine', methods=['POST'])
+def mine_once():
+    """
+    Trigger a single mining run manually.
+    """
+    data = request.get_json() or {}
+    iterations = data.get('iterations', 1000)
+    result = run_miner(iterations)
+    return jsonify(result)
+
+@app.route('/start', methods=['POST'])
+def start_mining():
+    global mining_active
+    if not mining_active:
+        mining_active = True
+        thread = threading.Thread(target=mining_loop)
+        thread.daemon = True
+        thread.start()
+        return jsonify({"message": "Mining loop started"})
+    return jsonify({"message": "Mining already active"})
+
+@app.route('/stop', methods=['POST'])
+def stop_mining():
+    global mining_active
+    mining_active = False
+    return jsonify({"message": "Mining loop stopped"})
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--server", action="store_true", help="Run as Web Server")
+    parser.add_argument("--loop", action="store_true", help="Run immediate loop (CLI mode)")
+    args = parser.parse_args()
+
+    if args.server:
+        print(f"[*] Starting Web Server on port {PORT}")
+        app.run(host='0.0.0.0', port=PORT)
+    elif args.loop:
+        # CLI Mode
+        mining_active = True
+        mining_loop()
+    else:
+        # One-off run
+        print(run_miner(1000))

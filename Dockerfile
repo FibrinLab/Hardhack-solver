@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies
-RUN pip3 install requests
+RUN pip3 install requests flask
 
 WORKDIR /app
 
@@ -27,6 +27,9 @@ RUN mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc)
 
+# Expose port for health checks
+EXPOSE 8000
+
 # Entry point
 ENTRYPOINT ["python3", "miner_agent.py"]
-CMD ["--loop"]
+CMD ["--server"]
