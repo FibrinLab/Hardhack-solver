@@ -4,7 +4,7 @@
 #include <cmath>
 
 #ifdef ENABLE_TT
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 
