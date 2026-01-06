@@ -34,6 +34,7 @@ if(ENABLE_TT)
         /opt/ronin/include
         /opt/tt-logger
         /opt/tt-logger/include
+        /opt/fmt/include
         /usr/local/include
     )
     link_directories(/opt/tt-metal/lib /usr/local/lib)
