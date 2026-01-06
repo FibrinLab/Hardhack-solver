@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     git \
     libopenblas-dev \
+    libyaml-cpp-dev \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
@@ -24,7 +25,7 @@ COPY . .
 
 # Build
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
     make -j$(nproc)
 
 # Expose port for health checks
