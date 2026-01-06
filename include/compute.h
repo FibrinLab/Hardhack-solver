@@ -3,18 +3,22 @@
 #include <memory>
 #include <string>
 
+// Dimensions from organizers
 constexpr int M = 16;
 constexpr int K = 50240;
-constexpr int N = 16;
+constexpr int N = 16; 
 
 class ComputeDevice {
 public:
     virtual ~ComputeDevice() = default;
     
-    // Use raw pointers to avoid vector overhead in the hot loop
+    // Updated types per organizer spec:
+    // A: unsigned u8
+    // B: signed i8
+    // C: signed i32 (16x16)
     virtual void matmul(const uint8_t* A, 
-                       const uint8_t* B, 
-                       uint8_t* C) = 0;
+                       const int8_t* B, 
+                       int32_t* C) = 0;
 
     virtual std::string name() const = 0;
 };

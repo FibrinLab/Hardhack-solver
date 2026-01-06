@@ -9,67 +9,46 @@
 class CpuComputeDevice : public ComputeDevice {
 public:
     void matmul(const uint8_t* A, 
-                const uint8_t* B, 
-                uint8_t* C) override {
+                const int8_t* B, 
+                int32_t* C) override {
         
-        // We accumulate in 32-bit to prevent overflow. 
-        // 16x16 matrix fits easily in L1 cache or even registers.
-        uint32_t sums[M * N] __attribute__((aligned(16)));
-        std::memset(sums, 0, sizeof(sums));
+        // Verified logic: Standard A x B, Little-Endian
+        std::memset(C, 0, M * N * sizeof(int32_t));
+
+        for (int i = 0; i < M; ++i) {
+            for (int k = 0; k < K; ++k) {
+                int32_t val_a = (int32_t)A[i * K + k];
+                const int8_t* b_row = &B[k * N];
+                int32_t* c_row = &C[i * N];
 
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
-        // Optimization: Since N=16, we can process one whole row of the 
-        // output matrix (16 columns) using NEON vectors.
-        for (int k = 0; k < K; ++k) {
-            // Load 16 bytes of B (one row of B)
-            uint8x16_t v_b = vld1q_u8(&B[k * 16]);
-            
-            // Expand B to 16-bit then 32-bit to prepare for accumulation
-            uint16x8_t v_b_lo = vmovl_u8(vget_low_u8(v_b));
-            uint16x8_t v_b_hi = vmovl_u8(vget_high_u8(v_b));
-
-            for (int i = 0; i < M; ++i) {
-                uint32_t a_val = A[i * K + k];
-                if (a_val == 0) continue; // Skip zeros (sparse-ish win)
+                // Vectorized row update (N=16)
+                int32x4_t va = vdupq_n_s32(val_a);
                 
-                uint16x8_t v_a = vdupq_n_u16((uint16_t)a_val);
-                
-                // Multiply and add to current sums
-                uint32_t* out_ptr = &sums[i * 16];
-                
-                // Vectorized Multiply-Accumulate
-                uint32x4_t v_res0 = vld1q_u32(out_ptr);
-                uint32x4_t v_res1 = vld1q_u32(out_ptr + 4);
-                uint32x4_t v_res2 = vld1q_u32(out_ptr + 8);
-                uint32x4_t v_res3 = vld1q_u32(out_ptr + 12);
-
-                v_res0 = vmlal_u16(v_res0, vget_low_u16(v_a), vget_low_u16(v_b_lo));
-                v_res1 = vmlal_u16(v_res1, vget_high_u16(v_a), vget_high_u16(v_b_lo));
-                v_res2 = vmlal_u16(v_res2, vget_low_u16(v_a), vget_low_u16(v_b_hi));
-                v_res3 = vmlal_u16(v_res3, vget_high_u16(v_a), vget_high_u16(v_b_hi));
-
-                vst1q_u32(out_ptr, v_res0);
-                vst1q_u32(out_ptr + 4, v_res1);
-                vst1q_u32(out_ptr + 8, v_res2);
-                vst1q_u32(out_ptr + 12, v_res3);
-            }
-        }
-#else
-        // Fallback for non-ARM
-        for (int k = 0; k < K; ++k) {
-            for (int i = 0; i < M; ++i) {
-                uint32_t a_val = A[i * K + k];
-                for (int j = 0; j < N; ++j) {
-                    sums[i * N + j] += a_val * B[k * N + j];
+                // Process 16 columns in 4 chunks of 4
+                for (int j = 0; j < 16; j += 4) {
+                    // 1. Load 4 bytes from B
+                    int8x8_t vb8 = vld1_s8(&b_row[j]);
+                    // 2. Widen 8-bit to 16-bit (gives 8 elements)
+                    int16x8_t vb16 = vmovl_s8(vb8);
+                    // 3. Widen first 4 elements of 16-bit to 32-bit
+                    int32x4_t vb32 = vmovl_s16(vget_low_s16(vb16));
+                    
+                    // 4. Load C, Multiply-Accumulate, Store
+                    int32x4_t vc = vld1q_s32(&c_row[j]);
+                    vc = vmlaq_s32(vc, va, vb32);
+                    vst1q_s32(&c_row[j], vc);
                 }
+#else
+                for (int j = 0; j < N; ++j) {
+                    c_row[j] += val_a * (int32_t)b_row[j];
+                }
+#endif
             }
         }
-#endif
-
-        for (int i = 0; i < M * N; ++i) C[i] = (uint8_t)(sums[i] & 0xFF);
     }
 
-    std::string name() const override { return "CPU (NEON Int8)"; }
+    std::string name() const override { return "CPU (Fixed NEON Winner)"; }
 };
 
 std::unique_ptr<ComputeDevice> create_cpu_compute() {

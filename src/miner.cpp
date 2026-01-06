@@ -16,14 +16,10 @@ inline bool check_diff_fast(const uint8_t* hash, int bits) {
     return true;
 }
 
-MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_bits, uint64_t max_iterations) {
+MiningResult Miner::mine(const std::vector<uint8_t>& rpc_seed, int difficulty_bits, uint64_t max_iterations) {
     auto start = std::chrono::high_resolution_clock::now();
-    std::vector<uint8_t> seed_template = base_seed;
-    if (seed_template.size() < 240) seed_template.resize(240, 0);
-
-    blake3_hasher base_hasher;
-    blake3_hasher_init(&base_hasher);
-    blake3_hasher_update(&base_hasher, seed_template.data(), 228);
+    std::vector<uint8_t> base_seed = rpc_seed;
+    if (base_seed.size() != 240) base_seed.resize(240, 0);
 
     MiningResult final_res = {false, {}, {}, 0, 0};
     bool found_global = false;
@@ -33,28 +29,35 @@ MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_b
         int thread_id = omp_get_thread_num();
         int num_threads = omp_get_num_threads();
         
-        std::vector<uint8_t> xof_buf(M * K + K * N);
-        std::vector<uint8_t> local_C(M * N);
-        std::vector<uint8_t> local_seed = seed_template;
-        uint64_t* nonce_ptr = reinterpret_cast<uint64_t*>(&local_seed[228]);
-        *nonce_ptr = (uint64_t)thread_id * (0xFFFFFFFFFFFFFFFF / num_threads);
+        std::vector<uint8_t> xof_buf(2 * M * K);
+        int32_t local_C[M * N];
+        std::vector<uint8_t> local_seed = base_seed;
+        
+        // Use all 12 bytes of the nonce (240 - 12 = 228)
+        uint64_t* n_low = reinterpret_cast<uint64_t*>(&local_seed[228]);
+        uint32_t* n_high = reinterpret_cast<uint32_t*>(&local_seed[236]);
+        
+        // Distribute starting points
+        *n_low = (uint64_t)thread_id * (0xFFFFFFFFFFFFFFFF / num_threads);
+        *n_high = (uint32_t)thread_id;
 
-        blake3_hasher thread_hasher;
+        blake3_hasher hasher;
         uint8_t h_out[BLAKE3_OUT_LEN];
 
         for (uint64_t i = 0; i < (max_iterations / num_threads) && !found_global; ++i) {
-            (*nonce_ptr)++;
+            (*n_low)++;
+            if (*n_low == 0) (*n_high)++;
 
-            std::memcpy(&thread_hasher, &base_hasher, sizeof(blake3_hasher));
-            blake3_hasher_update(&thread_hasher, &local_seed[228], 12);
-            blake3_hasher_finalize(&thread_hasher, xof_buf.data(), xof_buf.size());
+            blake3_hasher_init(&hasher);
+            blake3_hasher_update(&hasher, local_seed.data(), 240);
+            blake3_hasher_finalize(&hasher, xof_buf.data(), xof_buf.size());
             
-            device_->matmul(xof_buf.data(), xof_buf.data() + (M * K), local_C.data());
+            device_->matmul(xof_buf.data(), reinterpret_cast<const int8_t*>(xof_buf.data() + (M * K)), local_C);
 
             blake3_hasher sol_hasher;
             blake3_hasher_init(&sol_hasher);
             blake3_hasher_update(&sol_hasher, local_seed.data(), 240);
-            blake3_hasher_update(&sol_hasher, local_C.data(), M * N);
+            blake3_hasher_update(&sol_hasher, local_C, 1024);
             blake3_hasher_finalize(&sol_hasher, h_out, BLAKE3_OUT_LEN);
 
             if (check_diff_fast(h_out, difficulty_bits)) {
@@ -63,15 +66,14 @@ MiningResult Miner::mine(const std::vector<uint8_t>& base_seed, int difficulty_b
                     if (!found_global) {
                         found_global = true;
                         final_res.success = true;
-                        final_res.nonce = std::vector<uint8_t>(local_seed.end() - 12, local_seed.end());
                         final_res.solution = local_seed;
-                        final_res.solution.insert(final_res.solution.end(), local_C.begin(), local_C.end());
+                        const uint8_t* c_bytes = reinterpret_cast<const uint8_t*>(local_C);
+                        final_res.solution.insert(final_res.solution.end(), c_bytes, c_bytes + 1024);
                         final_res.iterations = i * num_threads;
                     }
                 }
             }
         }
-        if (!found_global && thread_id == 0) final_res.iterations = max_iterations;
     }
 
     auto end = std::chrono::high_resolution_clock::now();

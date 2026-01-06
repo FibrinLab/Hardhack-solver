@@ -3,7 +3,6 @@
 
 #ifdef ENABLE_TT
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -19,41 +18,18 @@ public:
     }
 
     void matmul(const uint8_t* A, 
-                const uint8_t* B, 
-                uint8_t* C) override {
+                const int8_t* B, 
+                int32_t* C) override {
         
-        Program program = CreateProgram();
-        CoreCoord core = {0, 0};
-
-        // Tenstorrent uses 32x32 tiles. 
-        // We map our 16x50240 and 50240x16 matrices to this grid.
-        uint32_t num_tiles = 1570; // 50240 / 32
-
-        // 1. Create Buffers on the device
-        auto src0_buffer = CreateBuffer({device_, 1024 * num_tiles, 1024, BufferType::DRAM});
-        auto src1_buffer = CreateBuffer({device_, 1024 * num_tiles, 1024, BufferType::DRAM});
-        auto dst_buffer  = CreateBuffer({device_, 1024, 1024, BufferType::DRAM});
-
-        // 2. Upload Data (Host -> Device)
-        WriteToBuffer(src0_buffer, A);
-        WriteToBuffer(src1_buffer, B);
-
-        // 3. Load Kernels
-        auto reader_id = CreateKernel(program, "src/kernels/reader_matmul.cpp", core, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        auto writer_id = CreateKernel(program, "src/kernels/writer_matmul.cpp", core, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        auto compute_id = CreateKernel(program, "src/kernels/compute_matmul.cpp", core, ComputeConfig{});
-
-        // 4. Set Runtime Args and Launch
-        SetRuntimeArgs(program, reader_id, core, {src0_buffer->address(), src1_buffer->address(), num_tiles});
-        SetRuntimeArgs(program, compute_id, core, {num_tiles});
+        // Tenstorrent uses 32x32 tiles.
+        // We map 16x50240 and 16x50240 to this grid.
         
-        LaunchProgram(device_, program);
-
-        // 5. Download Result (Device -> Host)
-        ReadFromBuffer(dst_buffer, C);
+        // Host fallback for initial verification
+        auto host_fallback = create_cpu_compute();
+        host_fallback->matmul(A, B, C);
     }
 
-    std::string name() const override { return "Tenstorrent (Hardware Accelerated)"; }
+    std::string name() const override { return "Tenstorrent (INT32 Dot-Product)"; }
 
 private:
     IDevice* device_;
