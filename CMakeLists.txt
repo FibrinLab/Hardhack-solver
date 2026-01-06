@@ -21,7 +21,13 @@ if(ENABLE_TT)
     add_definitions(-DENABLE_TT)
     
     # Try to find headers in standard locations or /opt/tt-metal
-    include_directories(/opt/tt-metal/include /usr/local/include)
+    include_directories(
+        /opt/tt-metal/include
+        /opt/tt-metal/src
+        /opt/tt-metal
+        /usr/local/include
+        /usr/local/tt-metal/include
+    )
     link_directories(/opt/tt-metal/lib /usr/local/lib)
 
     # Link against tt_metal and its dependencies

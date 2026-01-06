@@ -24,8 +24,9 @@ WORKDIR /app
 COPY . .
 
 # Build
+RUN find /opt /usr -name host_api.hpp || true
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=OFF && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
     make -j$(nproc)
 
 # Expose port for health checks
