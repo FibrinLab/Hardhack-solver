@@ -25,7 +25,7 @@ COPY . .
 
 # Build
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=OFF && \
     make -j$(nproc)
 
 # Expose port for health checks

@@ -90,6 +90,23 @@ def stop_mining():
     mining_active = False
     return jsonify({"message": "Mining loop stopped"})
 
+@app.route('/explore', methods=['GET'])
+def explore_fs():
+    """
+    Find where the Tenstorrent headers are hidden.
+    Usage: /explore?name=host_api.hpp
+    """
+    filename = request.args.get('name', 'host_api.hpp')
+    print(f"[*] Searching for {filename}...")
+    try:
+        # Search in likely locations first to be fast
+        cmd = ["find", "/opt", "/usr", "-name", filename]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        paths = result.stdout.strip().split('\n')
+        return jsonify({"found": paths, "raw": result.stdout})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", action="store_true", help="Run as Web Server")
