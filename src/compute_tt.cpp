@@ -5,8 +5,8 @@
 
 #ifdef ENABLE_TT
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
