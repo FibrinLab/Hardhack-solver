@@ -1,5 +1,5 @@
-# Use the official Tenstorrent Metalium DEV image (contains headers)
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+# Use standard Ubuntu as base since we are cloning manually
+FROM ubuntu:22.04
 
 # Ensure we have build tools and python
 USER root
@@ -16,10 +16,19 @@ RUN apt-get update && apt-get install -y \
     libspdlog-dev \
     python3 \
     python3-pip \
+    libhwloc-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install python dependencies
-RUN python3 -m pip install --ignore-installed requests flask
+# Install python dependencies for Agent AND tt-metal build
+RUN python3 -m pip install --ignore-installed requests flask pyyaml mako
+
+# Clone tt-metal recursively
+# We clone to /opt/tt-metal
+RUN git clone --recursive https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
+
+# Debug: List the structure so we know where headers are
+RUN ls -R /opt/tt-metal/tt_metal/include || true
+RUN ls -R /opt/tt-metal/tt_stl || true
 
 WORKDIR /app
 
