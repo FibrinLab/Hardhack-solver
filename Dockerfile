@@ -9,8 +9,16 @@ RUN apt-get update && apt-get install -y \
     build-essential cmake git curl openssl libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone ONLY the headers/source needed for compilation (depth 1 for speed)
+# Clone headers (depth 1 for speed)
 RUN git clone --depth 1 https://github.com/tenstorrent/tt-metal.git /opt/tt-metal
+
+# --- Unified Include Hack ---
+# This ensures all scattered Tenstorrent headers are found by the compiler
+RUN mkdir -p /app/unified_include && \
+    cp -r /opt/tt-metal/tt_metal/include/* /app/unified_include/ 2>/dev/null || true && \
+    cp -r /opt/tt-metal/tt_metal/api/* /app/unified_include/ 2>/dev/null || true && \
+    cp -r /opt/tt-metal/tt_metal/hostdevcommon/api/* /app/unified_include/ 2>/dev/null || true && \
+    cp -r /opt/tt-metal/tt_stl/* /app/unified_include/ 2>/dev/null || true
 
 WORKDIR /app
 

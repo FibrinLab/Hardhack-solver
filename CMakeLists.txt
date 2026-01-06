@@ -26,7 +26,7 @@ else()
     endif()
 endif()
 
-# 2. Blake3 (Fixed Flow Control)
+# 2. Blake3
 option(DISABLE_AVX512 "Disable AVX512 for compatibility" OFF)
 set(BLAKE3_SOURCES
     libs/blake3/c/blake3.c 
@@ -40,7 +40,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AM
         libs/blake3/c/blake3_sse41.c
         libs/blake3/c/blake3_avx2.c
     )
-    
     set_source_files_properties(libs/blake3/c/blake3_sse2.c PROPERTIES COMPILE_FLAGS "-msse2")
     set_source_files_properties(libs/blake3/c/blake3_sse41.c PROPERTIES COMPILE_FLAGS "-msse4.1")
     set_source_files_properties(libs/blake3/c/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
@@ -59,12 +58,12 @@ endif()
 add_library(blake3 STATIC ${BLAKE3_SOURCES})
 target_include_directories(blake3 PUBLIC libs/blake3/c)
 
-# 3. Tenstorrent Metal
+# 3. Tenstorrent Metal (Unified Include)
 if(ENABLE_TT)
     add_definitions(-DENABLE_TT)
+    # Point to the unified directory created in Dockerfile
+    include_directories(/app/unified_include)
     include_directories(/opt/tt-metal)
-    include_directories(/opt/tt-metal/tt_metal/include)
-    include_directories(/opt/tt-metal/tt_metal/api)
     link_directories(/opt/tt-metal/build/lib)
 endif()
 
@@ -74,6 +73,7 @@ add_executable(hardhack_prover src/prover_main.cpp)
 
 if(ENABLE_TT)
     target_sources(hardhack_miner PRIVATE src/compute_tt.cpp)
+    # Use -ltt_metal if find_package is unavailable
     target_link_libraries(hardhack_miner PRIVATE tt_metal)
 endif()
 
