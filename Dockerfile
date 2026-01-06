@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install python dependencies
-RUN pip3 install --ignore-installed requests flask
+RUN python3 -m pip install --ignore-installed requests flask
 
 WORKDIR /app
 
