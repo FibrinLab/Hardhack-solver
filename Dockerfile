@@ -63,14 +63,11 @@ RUN cp -r /opt/tt-umd/device/api/umd /app/unified_include/ || true
 RUN cp -r /opt/tt-umd/common/api/umd /app/unified_include/ || true
 # hostdevcommon bridge
 RUN cp -r /opt/tt-metal/tt_metal/hostdevcommon/api/hostdevcommon /app/unified_include/ || true
-RUN cp -r /opt/ronin/jitte/src/tt_metal/tt_stl/reflect /app/unified_include/ || true
+RUN cp -r /opt/ronin/jitte/src/tt_metal/tt_stl/reflect /app/unified_include/reflect_lib || true
 RUN cp -r /opt/fmt/include/fmt /app/unified_include/ || true
 
-# Debug: Where is base.h?
-RUN echo "FORCE RUN 1" && find /app/unified_include -name base.h
-
 # Forwarder hacks
-RUN printf "#pragma once\n#include \"reflect/reflect.hpp\"\n" > /app/unified_include/reflect
+RUN printf "#pragma once\n#include \"reflect_lib/reflect.hpp\"\n" > /app/unified_include/reflect
 
 WORKDIR /app
 
