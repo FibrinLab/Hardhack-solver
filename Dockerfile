@@ -1,5 +1,5 @@
-# Use the Tenstorrent base image as suggested
-FROM ghcr.io/tenstorrent/tt-xla/tt-xla-ird-ubuntu-22-04:latest
+# Use the official Tenstorrent Metalium release image
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
 
 # Ensure we have build tools and python
 USER root

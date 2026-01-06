@@ -27,6 +27,8 @@ if(ENABLE_TT)
         /opt/tt-metal
         /usr/local/include
         /usr/local/tt-metal/include
+        /home/user/tt-metal/src
+        /home/user/tt-metal
     )
     link_directories(/opt/tt-metal/lib /usr/local/lib)
 
