@@ -1,22 +1,26 @@
 #pragma once
-
-#include <vector>
 #include <cstdint>
-#include <string>
 #include <memory>
+#include <string>
 
-// Interface for Compute Backends (CPU vs Tenstorrent)
+constexpr int M = 16;
+constexpr int K = 50240;
+constexpr int N = 16;
+
 class ComputeDevice {
 public:
     virtual ~ComputeDevice() = default;
-
-    virtual void multiply(const std::vector<int8_t>& mat_a, 
-                          const std::vector<int8_t>& mat_b, 
-                          std::vector<uint8_t>& mat_c_out) = 0;
+    
+    // Use raw pointers to avoid vector overhead in the hot loop
+    virtual void matmul(const uint8_t* A, 
+                       const uint8_t* B, 
+                       uint8_t* C) = 0;
 
     virtual std::string name() const = 0;
 };
 
-// Factory functions
 std::unique_ptr<ComputeDevice> create_cpu_compute();
+
+#ifdef ENABLE_TT
 std::unique_ptr<ComputeDevice> create_tt_compute();
+#endif
