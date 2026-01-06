@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     git \
     libopenblas-dev \
     libyaml-cpp-dev \
+    nlohmann-json3-dev \
+    libfmt-dev \
+    libspdlog-dev \
     python3 \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
