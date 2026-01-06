@@ -22,7 +22,7 @@ def run_miner(iterations):
     """
     # FIX: Removed "-s" argument as the C++ binary does not support it
     cmd = [MINER_BINARY, "-n", str(iterations), "--json"]
-    print(f"[*] Running miner: {" ".join(cmd)}")
+    print(f"[*] Running miner: {' '.join(cmd)}")
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
