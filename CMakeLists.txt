@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(hardhack_kernel)
 
-set(CMAKE_CXX_STANDARD 17)
+if(ENABLE_TT)
+    set(CMAKE_CXX_STANDARD 20)
+else()
+    set(CMAKE_CXX_STANDARD 17)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -56,12 +60,39 @@ if(ENABLE_TT)
     endif()
     
     # Standard paths inside the official container
-    include_directories($ENV{TT_METAL_HOME})
-    include_directories($ENV{TT_METAL_HOME}/tt_metal/include)
-    include_directories($ENV{TT_METAL_HOME}/tt_metal/api)
-    include_directories(/usr/local/include/tt_metal)
+    if(DEFINED ENV{TT_METAL_HOME})
+        message(STATUS "[+] TT_METAL_HOME: $ENV{TT_METAL_HOME}")
+        include_directories($ENV{TT_METAL_HOME})
+        include_directories($ENV{TT_METAL_HOME}/tt_metal/include)
+        include_directories($ENV{TT_METAL_HOME}/tt_metal/api)
+        include_directories($ENV{TT_METAL_HOME}/include)
+        include_directories($ENV{TT_METAL_HOME}/include/tt_metal)
+        include_directories($ENV{TT_METAL_HOME}/tt_metal)
+    endif()
     
-    link_directories($ENV{TT_METAL_HOME}/build/lib)
+    # Additional common paths
+    include_directories(/usr/local/include)
+    include_directories(/usr/local/include/tt_metal)
+    include_directories(/opt/tt-metal)
+    include_directories(/opt/tt-metal/include)
+    include_directories(/opt/tt-metal/tt_metal/include)
+    
+    # Python ttnn package paths (for tt-metalium images)
+    include_directories(/opt/venv/lib/python3.10/site-packages/ttnn)
+    include_directories(/opt/venv/lib/python3.10/site-packages/ttnn/tt_metal)
+    include_directories(/opt/venv/lib/python3.10/site-packages/ttnn/tt_metal/include)
+    include_directories(/opt/venv/lib/python3.10/site-packages/ttnn/tt_metal/api)
+    
+    # Cloned headers location
+    include_directories(/opt/tt-metal)
+    
+    # Link directories
+    if(DEFINED ENV{TT_METAL_HOME})
+        link_directories($ENV{TT_METAL_HOME}/build/lib)
+        link_directories($ENV{TT_METAL_HOME}/lib)
+    endif()
+    link_directories(/usr/local/lib)
+    link_directories(/opt/tt-metal/lib)
 endif()
 
 # 4. Source Files
@@ -70,6 +101,9 @@ add_executable(hardhack_prover src/prover_main.cpp)
 
 if(ENABLE_TT)
     target_sources(hardhack_miner PRIVATE src/compute_tt.cpp)
+    # Add tt_stl, enchantum, tt-logger as system includes
+    # Note: umd and hostdevcommon should be included from /opt/tt-metal so paths like umd/... and hostdevcommon/... work
+    target_include_directories(hardhack_miner SYSTEM PRIVATE /opt/tt-metal/tt_stl /opt/tt-metal /opt/tt-metal/tt-logger)
     target_link_libraries(hardhack_miner PRIVATE tt_metal)
 endif()
 
