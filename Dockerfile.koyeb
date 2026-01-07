@@ -1,0 +1,29 @@
+# Use the Tenstorrent Wormhole image (N300S is Wormhole-based)
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl xxd libomp-dev git cmake build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 2. Sync Tenstorrent Headers (Crucial for build)
+# We use the pre-installed TT_METAL_HOME from the image
+RUN ln -s $TT_METAL_HOME /opt/tt-metal
+
+# 3. Copy and Build project
+COPY . .
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON -DDISABLE_AVX512=ON && \
+    make -j$(nproc)
+
+# 4. Prepare execution
+RUN chmod +x mine.sh prove.sh
+
+# Set the entry point to use the hardware-enabled miner
+ENTRYPOINT ["./mine.sh"]
+
