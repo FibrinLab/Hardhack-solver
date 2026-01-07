@@ -28,46 +28,39 @@ endif()
 
 # 2. Blake3
 option(DISABLE_AVX512 "Disable AVX512 for compatibility" OFF)
-set(BLAKE3_SOURCES
-    libs/blake3/c/blake3.c 
-    libs/blake3/c/blake3_dispatch.c 
-    libs/blake3/c/blake3_portable.c
-)
+set(BLAKE3_SOURCES libs/blake3/c/blake3.c libs/blake3/c/blake3_dispatch.c libs/blake3/c/blake3_portable.c)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64")
-    list(APPEND BLAKE3_SOURCES
-        libs/blake3/c/blake3_sse2.c
-        libs/blake3/c/blake3_sse41.c
-        libs/blake3/c/blake3_avx2.c
-    )
-    set_source_files_properties(libs/blake3/c/blake3_sse2.c PROPERTIES COMPILE_FLAGS "-msse2")
-    set_source_files_properties(libs/blake3/c/blake3_sse41.c PROPERTIES COMPILE_FLAGS "-msse4.1")
-    set_source_files_properties(libs/blake3/c/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
-
+    list(APPEND BLAKE3_SOURCES libs/blake3/c/blake3_sse2.c libs/blake3/c/blake3_sse41.c libs/blake3/c/blake3_avx2.c)
     if(NOT DISABLE_AVX512)
         list(APPEND BLAKE3_SOURCES libs/blake3/c/blake3_avx512.c)
         set_source_files_properties(libs/blake3/c/blake3_avx512.c PROPERTIES COMPILE_FLAGS "-mavx512f -mavx512vl -mavx512bw -mavx512dq")
     else()
         add_definitions(-DBLAKE3_NO_AVX512)
     endif()
-
+    set_source_files_properties(libs/blake3/c/blake3_sse2.c PROPERTIES COMPILE_FLAGS "-msse2")
+    set_source_files_properties(libs/blake3/c/blake3_sse41.c PROPERTIES COMPILE_FLAGS "-msse4.1")
+    set_source_files_properties(libs/blake3/c/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
     list(APPEND BLAKE3_SOURCES libs/blake3/c/blake3_neon.c)
 endif()
-
 add_library(blake3 STATIC ${BLAKE3_SOURCES})
 target_include_directories(blake3 PUBLIC libs/blake3/c)
 
-# 3. Tenstorrent Metal (Explicit for Koyeb N300S)
+# 3. Tenstorrent Metal (Absolute Override)
 if(ENABLE_TT)
     add_definitions(-DENABLE_TT)
-    # Brute-force discovery of headers in the Tenstorrent official image
+    if(TT_HEADER_DIR)
+        message(STATUS "[+] Using explicit TT Header DIR: ${TT_HEADER_DIR}")
+        include_directories(${TT_HEADER_DIR})
+    endif()
+    
+    # Standard paths inside the official container
     include_directories($ENV{TT_METAL_HOME})
     include_directories($ENV{TT_METAL_HOME}/tt_metal/include)
     include_directories($ENV{TT_METAL_HOME}/tt_metal/api)
-    include_directories($ENV{TT_METAL_HOME}/tt_metal/api/tt_metal)
+    include_directories(/usr/local/include/tt_metal)
     
-    # Discovery of libraries
     link_directories($ENV{TT_METAL_HOME}/build/lib)
 endif()
 
@@ -77,7 +70,6 @@ add_executable(hardhack_prover src/prover_main.cpp)
 
 if(ENABLE_TT)
     target_sources(hardhack_miner PRIVATE src/compute_tt.cpp)
-    # Link against the hardware libraries
     target_link_libraries(hardhack_miner PRIVATE tt_metal)
 endif()
 

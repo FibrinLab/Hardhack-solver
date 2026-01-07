@@ -1,37 +1,36 @@
-FROM ubuntu:22.04
+# Use official Tenstorrent release image
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
 
-# Avoid interactive prompts
+USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install system dependencies
+# 1. Install dependencies
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    curl \
-    xxd \
-    libomp-dev \
+    curl xxd libomp-dev git cmake build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# 2. BRUTE FORCE HEADERS:
+# The images are missing headers, so we clone them to a local path
+RUN git clone --depth 1 https://github.com/tenstorrent/tt-metal.git /tmp/tt-metal-src
+
+# 3. Create a clean unified include directory
+RUN mkdir -p /app/tt_headers && \
+    cp -r /tmp/tt-metal-src/tt_metal/include/* /app/tt_headers/ 2>/dev/null || true && \
+    cp -r /tmp/tt-metal-src/tt_metal/api/* /app/tt_headers/ 2>/dev/null || true && \
+    cp -r /tmp/tt-metal-src/tt_metal/hostdevcommon/api/* /app/tt_headers/ 2>/dev/null || true && \
+    cp -r /tmp/tt-metal-src/tt_stl/* /app/tt_headers/ 2>/dev/null || true
 
 WORKDIR /app
 
-# 2. Copy source code and libraries
-COPY CMakeLists.txt .
-COPY include/ include/
-COPY src/ src/
-COPY libs/ libs/
-
-# 3. Build optimized binaries
-# ENABLE_TT=OFF for standard Linux builds
-# DISABLE_AVX512=ON ensures compatibility with virtualized cloud environments
+# 4. Build binaries
+COPY . .
 RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=OFF -DDISABLE_AVX512=ON && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release \
+             -DENABLE_TT=ON \
+             -DDISABLE_AVX512=ON \
+             -DTT_HEADER_DIR=/app/tt_headers && \
     make -j$(nproc)
 
-# 4. Final preparation
-COPY mine.sh .
-COPY prove.sh .
+# 5. Execution
 RUN chmod +x mine.sh prove.sh
-
-# Default to mining track
 ENTRYPOINT ["./mine.sh"]
