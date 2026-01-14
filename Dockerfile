@@ -47,8 +47,8 @@ RUN set -eux; \
     if [ ! -f "$TT_METAL_HOME/tt_metal/api/tt-metalium/host_api.hpp" ]; then \
         git clone --recurse-submodules --shallow-submodules "$TT_METAL_REPO" "$TT_METAL_HOME"; \
         cd "$TT_METAL_HOME"; \
-        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release; \
-        cmake --build build; \
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_UNITY_BUILD=OFF; \
+        cmake --build build -j 2; \
     fi; \
     fmt_dir="$(find /usr/include -type d -name fmt -print -quit)"; \
     if [ -n "$fmt_dir" ] && [ ! -f "$fmt_dir/base.h" ]; then \
