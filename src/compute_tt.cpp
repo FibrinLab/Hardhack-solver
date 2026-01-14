@@ -9,7 +9,7 @@
 namespace tt {
 namespace tt_metal {
     namespace stl {
-        template<typename T, std::size_t Extent = std::dynamic_extent>
+        template<typename T, std::size_t Extent = tt::ttsl::dynamic_extent>
         using Span = tt::ttsl::Span<T, Extent>;
     }
 }

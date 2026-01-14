@@ -47,6 +47,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AM
     set_source_files_properties(libs/blake3/c/blake3_avx2.c PROPERTIES COMPILE_FLAGS "-mavx2")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
     list(APPEND BLAKE3_SOURCES libs/blake3/c/blake3_neon.c)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
+    # RISC-V: Use portable BLAKE3 implementation (already included in BLAKE3_SOURCES)
+    # Add RISC-V specific optimizations if needed
+    message(STATUS "[+] Building for RISC-V architecture")
 endif()
 add_library(blake3 STATIC ${BLAKE3_SOURCES})
 target_include_directories(blake3 PUBLIC libs/blake3/c)
@@ -98,6 +102,7 @@ endif()
 # 4. Source Files
 add_executable(hardhack_miner src/main.cpp src/miner.cpp src/compute_cpu.cpp)
 add_executable(hardhack_prover src/prover_main.cpp)
+add_executable(hardhack_merkle_prover src/merkle_prover_main.cpp src/merkle.cpp)
 
 if(ENABLE_TT)
     target_sources(hardhack_miner PRIVATE src/compute_tt.cpp)
@@ -109,3 +114,4 @@ endif()
 
 target_link_libraries(hardhack_miner PRIVATE blake3 pthread dl)
 target_link_libraries(hardhack_prover PRIVATE blake3 pthread dl)
+target_link_libraries(hardhack_merkle_prover PRIVATE blake3 pthread dl)
