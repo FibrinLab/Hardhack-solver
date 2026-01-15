@@ -81,7 +81,7 @@ class TTNNMiner:
         print(f"TTNN GPU ready. Workers: {self.num_workers}, Batch: {self.batch_size}", file=sys.stderr)
     
     def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
-        """GPU matmul"""
+        """GPU matmul for single matrix"""
         A_t = torch.from_numpy(A.astype(np.float32))
         B_t = torch.from_numpy(B.astype(np.float32))
         
@@ -92,6 +92,21 @@ class TTNNMiner:
         C_t = ttnn.to_torch(C_tt)
         
         return C_t.numpy().astype(np.int32)
+    
+    def matmul_batch(self, A_batch: np.ndarray, B_batch: np.ndarray) -> list:
+        """Batched GPU matmul using torch.bmm"""
+        batch = A_batch.shape[0]
+        
+        # Convert to torch tensors with batch dimension
+        A_t = torch.from_numpy(A_batch.astype(np.float32))  # (batch, 16, 50240)
+        B_t = torch.from_numpy(B_batch.astype(np.float32))  # (batch, 50240, 16)
+        
+        # Use torch batched matmul on CPU first, then send result
+        # Since TTNN may not support bmm directly, we use torch
+        C_t = torch.bmm(A_t, B_t)  # (batch, 16, 16)
+        
+        # Return as list of numpy arrays
+        return [C_t[i].numpy().astype(np.int32) for i in range(batch)]
     
     def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
         """
@@ -119,9 +134,16 @@ class TTNNMiner:
                 args = [(seed, n) for n in range(nonce, min(nonce + batch_size, max_iterations))]
                 batch_data = pool.map(gen_one_global, args)
 
-                # GPU matmul for each item
-                for i, (current_seed, A, B) in enumerate(batch_data):
-                    C = self.matmul(A, B)
+                # Stack matrices for batched matmul
+                A_batch = np.stack([d[1] for d in batch_data])
+                B_batch = np.stack([d[2] for d in batch_data])
+                
+                # Batched matmul (uses torch.bmm - much faster than loop)
+                C_batch = self.matmul_batch(A_batch, B_batch)
+                
+                # Check results
+                for i, (current_seed, _, _) in enumerate(batch_data):
+                    C = C_batch[i]
                     
                     solution = current_seed + C.astype('<i4').tobytes()
                     solution_hash = blake3_hash(solution)
