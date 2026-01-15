@@ -108,7 +108,8 @@ def worker(worker_id: int, difficulty: int):
                 if bits > best_bits:
                     best_bits = bits
                     best_solution = solution
-                    print(f"[Worker {worker_id}] NEW BEST: {bits} bits", file=sys.stderr)
+                    elapsed = time.time() - start_time if 'start_time' in globals() else 0
+                    print(f"NEW BEST: {bits} bits @ solve #{total_seeds}", file=sys.stderr)
                 
                 if bits >= difficulty:
                     results_queue.put(("found", solution, bits))
@@ -181,7 +182,20 @@ def main():
                     elapsed = now - start_time
                     with stats_lock:
                         rate = total_seeds / elapsed if elapsed > 0 else 0
-                        print(f"Seeds: {total_seeds}, Rate: {rate:.1f}/s, Best: {best_bits} bits", file=sys.stderr)
+                        # Estimate time to solution (2^difficulty seeds on average)
+                        expected_seeds = 2 ** difficulty
+                        eta_seconds = (expected_seeds - total_seeds) / rate if rate > 0 else float('inf')
+                        eta_min = eta_seconds / 60
+                        eta_hr = eta_seconds / 3600
+                        
+                        if eta_hr > 1:
+                            eta_str = f"{eta_hr:.1f}h"
+                        elif eta_min > 1:
+                            eta_str = f"{eta_min:.1f}m"
+                        else:
+                            eta_str = f"{eta_seconds:.0f}s"
+                        
+                        print(f"Solves: {total_seeds} | Rate: {rate:.1f}/s | Best: {best_bits}/{difficulty} bits | ETA: {eta_str}", file=sys.stderr)
                     last_report = now
                     
         except KeyboardInterrupt:
