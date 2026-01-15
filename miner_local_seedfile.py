@@ -98,20 +98,22 @@ def _process_nonce_gpu(nonce: int):
     return nonce, bits, solution
 
 
-def _build_seed_from_json(data: dict) -> bytes:
-    epoch_le = bytes.fromhex(data["epoch_le"])
-    segment_vr_hash = bytes.fromhex(data["segment_vr_hash"])
-    pk = bytes.fromhex(data["pk"])
-    pop = bytes.fromhex(data["pop"])
+def _parse_hex_field(name: str, hex_str: str, expected_len: int, allow_pad: bool = False) -> bytes:
+    raw = bytes.fromhex(hex_str)
+    if len(raw) == expected_len:
+        return raw
+    if allow_pad and len(raw) < expected_len:
+        # Right-pad with zeros to expected length
+        return raw + (b"\x00" * (expected_len - len(raw)))
+    raise ValueError(f"{name} must be {expected_len} bytes (got {len(raw)})")
 
-    if len(epoch_le) != 4:
-        raise ValueError("epoch_le must be 4 bytes (little-endian hex)")
-    if len(segment_vr_hash) != 32:
-        raise ValueError("segment_vr_hash must be 32 bytes")
-    if len(pk) != 48:
-        raise ValueError("pk must be 48 bytes")
-    if len(pop) != 96:
-        raise ValueError("pop must be 96 bytes")
+
+def _build_seed_from_json(data: dict) -> bytes:
+    epoch_le = _parse_hex_field("epoch_le", data["epoch_le"], 4)
+    segment_vr_hash = _parse_hex_field("segment_vr_hash", data["segment_vr_hash"], 32)
+    pk = _parse_hex_field("pk", data["pk"], 48)
+    # Allow pop to be shorter and pad to 96 bytes
+    pop = _parse_hex_field("pop", data["pop"], 96, allow_pad=True)
 
     nonce = b"\x00" * 12
     return epoch_le + segment_vr_hash + pk + pop + pk + nonce
