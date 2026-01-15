@@ -20,7 +20,9 @@ def blake3_hash(data: bytes) -> bytes:
     return blake3.blake3(data).digest()
 
 def blake3_xof(data: bytes, length: int) -> bytes:
-    return blake3.blake3(data).digest(length=length)
+    # Use blake3's built-in multithreading for large outputs
+    h = blake3.blake3(data, max_threads=blake3.blake3.AUTO)
+    return h.digest(length=length)
 
 # TTNN is REQUIRED
 import ttnn
