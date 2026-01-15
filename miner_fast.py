@@ -59,13 +59,26 @@ def check_difficulty(hash_bytes: bytes, difficulty_bits: int) -> int:
     return 256 - hash_int.bit_length()
 
 
+def gen_one_global(args):
+    """Global function for multiprocessing - generates XOF and matrices for one nonce"""
+    seed, nonce = args
+    seed_arr = bytearray(seed)
+    struct.pack_into('<Q', seed_arr, 228, nonce)
+    current_seed = bytes(seed_arr)
+    xof_data = blake3_xof(current_seed, XOF_SIZE)
+    A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K)
+    B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N)
+    return current_seed, A, B
+
+
 class TTNNMiner:
-    def __init__(self, device_id=0):
+    def __init__(self, device_id=0, num_workers=None):
+        import multiprocessing
         print("Initializing TTNN GPU...", file=sys.stderr)
         self.device = ttnn.open_device(device_id=device_id)
-        print(f"TTNN GPU ready on device {device_id}", file=sys.stderr)
-        # Batch size for pipelined processing
-        self.batch_size = 64
+        self.num_workers = num_workers or multiprocessing.cpu_count()
+        self.batch_size = self.num_workers * 16  # Scale batch with workers
+        print(f"TTNN GPU ready. Workers: {self.num_workers}, Batch: {self.batch_size}", file=sys.stderr)
     
     def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
         """GPU matmul"""
@@ -82,12 +95,12 @@ class TTNNMiner:
     
     def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
         """
-        Correct math + faster pipeline:
-        - CPU threads generate XOF/A/B for a batch of nonces
-        - Single batched GPU matmul
-        - Hash/verify on CPU
+        Maximum speed pipeline:
+        - Multiprocessing pool generates XOF/A/B (bypasses GIL)
+        - GPU matmul per item
+        - Hash/verify
         """
-        from concurrent.futures import ThreadPoolExecutor
+        from multiprocessing import Pool
 
         best_bits = 0
         best_solution = None
@@ -95,58 +108,48 @@ class TTNNMiner:
         start_time = time.time()
 
         batch_size = self.batch_size
+        
+        # Create process pool once
+        pool = Pool(self.num_workers)
 
-        def gen_one(nonce: int):
-            seed_arr = bytearray(seed)
-            struct.pack_into('<Q', seed_arr, 228, nonce)
-            current_seed = bytes(seed_arr)
-            xof_data = blake3_xof(current_seed, XOF_SIZE)
-            A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K)
-            B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N)
-            return current_seed, A, B
+        try:
+            nonce = 0
+            while nonce < max_iterations:
+                # Generate batch using multiprocessing (true parallelism)
+                args = [(seed, n) for n in range(nonce, min(nonce + batch_size, max_iterations))]
+                batch_data = pool.map(gen_one_global, args)
 
-        nonce = 0
-        while nonce < max_iterations:
-            # Generate batch of A/B in parallel (blake3 is C-backed and releases GIL)
-            with ThreadPoolExecutor() as ex:
-                batch_data = list(ex.map(gen_one, range(nonce, min(nonce + batch_size, max_iterations))))
+                # GPU matmul for each item
+                for i, (current_seed, A, B) in enumerate(batch_data):
+                    C = self.matmul(A, B)
+                    
+                    solution = current_seed + C.astype('<i4').tobytes()
+                    solution_hash = blake3_hash(solution)
+                    leading_zeros = check_difficulty(solution_hash, difficulty)
 
-            # Stack for batched GPU matmul
-            A_batch = np.stack([d[1] for d in batch_data]).astype(np.float32)
-            B_batch = np.stack([d[2] for d in batch_data]).astype(np.float32)
+                    total_hashes += 1
 
-            # GPU matmul per item (looped but all on GPU)
-            C_list = []
-            for i in range(A_batch.shape[0]):
-                C_list.append(self.matmul(A_batch[i], B_batch[i]))
-            C_batch = C_list
+                    if leading_zeros > best_bits:
+                        best_bits = leading_zeros
+                        best_solution = solution
+                        elapsed = time.time() - start_time
+                        rate = total_hashes / elapsed if elapsed > 0 else 0
+                        print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce+i}, Rate: {rate:.1f} H/s", file=sys.stderr)
 
-            # Hash and check
-            for i, (current_seed, _, _) in enumerate(batch_data):
-                C = C_batch[i]
-                solution = current_seed + C.astype('<i4').tobytes()
-                solution_hash = blake3_hash(solution)
-                leading_zeros = check_difficulty(solution_hash, difficulty)
+                        if leading_zeros >= difficulty:
+                            print("SOLUTION FOUND!", file=sys.stderr)
+                            pool.terminate()
+                            return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce+i, "bits": leading_zeros}
 
-                total_hashes += 1
+                nonce += batch_size
 
-                if leading_zeros > best_bits:
-                    best_bits = leading_zeros
-                    best_solution = solution
+                if total_hashes % 1000 == 0:
                     elapsed = time.time() - start_time
                     rate = total_hashes / elapsed if elapsed > 0 else 0
-                    print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce+i}, Rate: {rate:.1f} H/s", file=sys.stderr)
-
-                    if leading_zeros >= difficulty:
-                        print("SOLUTION FOUND!", file=sys.stderr)
-                        return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce+i, "bits": leading_zeros}
-
-            nonce += batch_size
-
-            if total_hashes % 1000 == 0:
-                elapsed = time.time() - start_time
-                rate = total_hashes / elapsed if elapsed > 0 else 0
-                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+                    print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+        finally:
+            pool.close()
+            pool.join()
 
         return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
     
