@@ -27,26 +27,8 @@ except ImportError:
     os.system("pip3 install base58")
     import base58
 
-# Try to use GPU for matmul
-USE_GPU = False
-try:
-    import torch
-    if torch.cuda.is_available():
-        USE_GPU = True
-        GPU_DEVICE = torch.device('cuda')
-        print("Using CUDA GPU for matmul", file=sys.stderr)
-    else:
-        # Try TTNN but with chunked approach for precision
-        try:
-            import ttnn
-            USE_GPU = True
-            GPU_DEVICE = "ttnn"
-            TTNN_DEVICE = ttnn.open_device(device_id=0)
-            print("Using TTNN GPU for matmul (chunked for precision)", file=sys.stderr)
-        except:
-            print("No GPU available, using CPU", file=sys.stderr)
-except ImportError:
-    print("PyTorch not available, using CPU", file=sys.stderr)
+# GPU cannot do exact int32 matmul - use CPU only
+print("Using CPU for matmul (exact int32 precision)", file=sys.stderr)
 
 RPC_URL = "https://testnet-rpc.ama.one"
 M, K, N = 16, 50240, 16
@@ -97,55 +79,12 @@ def check_difficulty(hash_bytes: bytes) -> int:
     return 256 - hash_int.bit_length()
 
 
-# Lock for GPU access (TTNN is not thread-safe)
-gpu_lock = threading.Lock()
-
-def gpu_matmul(A: np.ndarray, B: np.ndarray) -> np.ndarray:
-    """GPU matmul with int32 precision"""
-    global TTNN_DEVICE
-    
-    if GPU_DEVICE == "ttnn":
-        # Use chunked approach for TTNN to maintain precision
-        CHUNK_SIZE = 32  # Very small for precision
-        num_chunks = (K + CHUNK_SIZE - 1) // CHUNK_SIZE
-        C_total = np.zeros((M, N), dtype=np.int64)
-        
-        with gpu_lock:
-            for i in range(num_chunks):
-                k_start = i * CHUNK_SIZE
-                k_end = min((i + 1) * CHUNK_SIZE, K)
-                
-                A_chunk = A[:, k_start:k_end].astype(np.float32)
-                B_chunk = B[k_start:k_end, :].astype(np.float32)
-                
-                A_t = torch.from_numpy(A_chunk)
-                B_t = torch.from_numpy(B_chunk)
-                
-                A_tt = ttnn.from_torch(A_t, device=TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
-                B_tt = ttnn.from_torch(B_t, device=TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
-                
-                C_tt = ttnn.matmul(A_tt, B_tt)
-                C_t = ttnn.to_torch(C_tt)
-                C_chunk = C_t.numpy()
-                
-                C_total += C_chunk.astype(np.int64)
-        
-        return C_total.astype(np.int32)
-    else:
-        # PyTorch CUDA - can do int32 directly
-        with gpu_lock:
-            A_t = torch.from_numpy(A.astype(np.int32)).to(GPU_DEVICE)
-            B_t = torch.from_numpy(B.astype(np.int32)).to(GPU_DEVICE)
-            C_t = torch.matmul(A_t, B_t)
-            return C_t.cpu().numpy()
-
-
 def cpu_matmul(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """CPU matmul with exact int32 precision"""
     return np.matmul(A.astype(np.int32), B.astype(np.int32))
 
 
-def worker(worker_id: int, difficulty: int, use_gpu: bool):
+def worker(worker_id: int, difficulty: int):
     """Worker thread: fetch seed, compute, check"""
     global total_seeds, best_bits, best_solution
     
@@ -154,12 +93,8 @@ def worker(worker_id: int, difficulty: int, use_gpu: bool):
             # Fetch seed with pre-computed matrices (server does XOF!)
             seed, A, B = fetch_seed_with_matrices()
             
-            # Matmul (GPU or CPU)
-            if use_gpu and USE_GPU:
-                C = gpu_matmul(A, B)
-            else:
-                C = cpu_matmul(A, B)
-            
+            # CPU matmul (exact int32 precision)
+            C = cpu_matmul(A, B)
             C_bytes = C.astype('<i4').tobytes()
             
             # Build solution and hash
@@ -191,13 +126,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--workers", type=int, default=20, help="Number of parallel workers")
     parser.add_argument("--loop", action="store_true", help="Run continuously")
-    parser.add_argument("--gpu", action="store_true", help="Use GPU for matmul")
     args = parser.parse_args()
     
-    if args.gpu and USE_GPU:
-        print(f"Starting {args.workers} parallel workers with GPU matmul...", file=sys.stderr)
-    else:
-        print(f"Starting {args.workers} parallel workers with CPU matmul...", file=sys.stderr)
+    print(f"Starting {args.workers} parallel workers...", file=sys.stderr)
     
     while True:
         # Reset state
@@ -212,10 +143,7 @@ def main():
         
         # Validate first seed
         seed, A, B = fetch_seed_with_matrices()
-        if args.gpu and USE_GPU:
-            C = gpu_matmul(A, B)
-        else:
-            C = cpu_matmul(A, B)
+        C = cpu_matmul(A, B)
         solution = seed + C.astype('<i4').tobytes()
         val = submit_solution(solution)
         print(f"Validation: {val}", file=sys.stderr)
@@ -223,7 +151,7 @@ def main():
         # Start workers
         workers = []
         for i in range(args.workers):
-            t = threading.Thread(target=worker, args=(i, difficulty, args.gpu))
+            t = threading.Thread(target=worker, args=(i, difficulty))
             t.daemon = True
             t.start()
             workers.append(t)
