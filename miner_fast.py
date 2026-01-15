@@ -264,70 +264,45 @@ def main():
     miner = TTNNMiner(device_id=0)
     
     try:
+        difficulty = fetch_difficulty()
+        print(f"Difficulty: {difficulty} bits", file=sys.stderr)
+        
+        total_seeds = 0
+        best_bits = 0
+        start_time = time.time()
+        
         while True:
             # Fetch seed with pre-computed matrices
-            print("Fetching seed with matrices...", file=sys.stderr)
             seed, A, B = fetch_seed_with_matrices()
-            difficulty = fetch_difficulty()
-            print(f"Seed: {len(seed)} bytes, Difficulty: {difficulty} bits", file=sys.stderr)
             
-            # Compute C once on GPU
-            print("Computing matmul on GPU...", file=sys.stderr)
+            # GPU matmul
             C = miner.matmul(A, B)
             C_bytes = C.astype('<i4').tobytes()
-            print(f"C computed. Shape: {C.shape}", file=sys.stderr)
             
-            # Fast mining loop - vary nonce, hash quickly
-            best_bits = 0
-            best_solution = None
-            seed_arr = bytearray(seed)
-            start_time = time.time()
+            # Check original seed (valid_math will be true)
+            solution = seed + C_bytes
+            h = blake3_hash(solution)
+            bits = check_difficulty(h, difficulty)
             
-            # Submit with ORIGINAL seed (for valid_math)
-            original_solution = seed + C_bytes
-            original_hash = blake3_hash(original_solution)
-            original_bits = check_difficulty(original_hash, difficulty)
-            print(f"Original seed: {original_bits} bits", file=sys.stderr)
+            total_seeds += 1
             
-            # Always try submitting original to check valid_math
-            if original_bits >= 15:  # Submit if decent bits to see validation
-                print(f"Submitting original seed ({original_bits} bits)...", file=sys.stderr)
-                val = submit_solution(original_solution)
+            if bits > best_bits:
+                best_bits = bits
+                elapsed = time.time() - start_time
+                rate = total_seeds / elapsed if elapsed > 0 else 0
+                print(f"NEW BEST: {bits} bits, Seeds: {total_seeds}, Rate: {rate:.1f} seeds/s", file=sys.stderr)
+            
+            if bits >= difficulty:
+                print(f"SOLUTION FOUND! {bits} bits", file=sys.stderr)
+                val = submit_solution(solution)
                 print(f"Validation: {val}", file=sys.stderr)
-                if val.get("valid") and val.get("valid_math"):
-                    print("SUCCESS!", file=sys.stderr)
-                    continue
+                if not args.loop:
+                    break
             
-            if original_bits >= difficulty:
-                continue  # Already submitted above
-            else:
-                # Keep hashing with modified nonces to find good hash
-                # But when we find one, we'll need a new seed anyway
-                for nonce in range(args.iterations):
-                    struct.pack_into('<Q', seed_arr, 228, nonce)
-                    solution = bytes(seed_arr) + C_bytes
-                    h = blake3_hash(solution)
-                    bits = check_difficulty(h, difficulty)
-                    
-                    if bits > best_bits:
-                        best_bits = bits
-                        elapsed = time.time() - start_time
-                        rate = (nonce + 1) / elapsed if elapsed > 0 else 0
-                        print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.0f} H/s", file=sys.stderr)
-                    
-                    if bits >= difficulty:
-                        # Found good hash but can't use it (wrong math)
-                        # Fetch new seed and try with that
-                        print(f"Found {bits} bits - fetching fresh seed...", file=sys.stderr)
-                        break
-                    
-                    if (nonce + 1) % 100000 == 0:
-                        elapsed = time.time() - start_time
-                        rate = (nonce + 1) / elapsed if elapsed > 0 else 0
-                        print(f"Hashes: {nonce+1}, Rate: {rate:.0f} H/s, Best: {best_bits} bits", file=sys.stderr)
-            
-            if not args.loop:
-                break
+            if total_seeds % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = total_seeds / elapsed if elapsed > 0 else 0
+                print(f"Seeds: {total_seeds}, Rate: {rate:.1f}/s, Best: {best_bits} bits", file=sys.stderr)
     except KeyboardInterrupt:
         print("\nStopped", file=sys.stderr)
     finally:
