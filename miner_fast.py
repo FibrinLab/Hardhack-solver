@@ -265,18 +265,47 @@ def main():
     
     try:
         while True:
-            # Fetch seed with pre-computed matrices - no XOF needed!
+            # Fetch seed with pre-computed matrices
             print("Fetching seed with matrices...", file=sys.stderr)
             seed, A, B = fetch_seed_with_matrices()
             difficulty = fetch_difficulty()
             print(f"Seed: {len(seed)} bytes, Difficulty: {difficulty} bits", file=sys.stderr)
             
-            result = miner.mine_fast(seed, A, B, difficulty, args.iterations)
+            # Compute C once on GPU
+            print("Computing matmul on GPU...", file=sys.stderr)
+            C = miner.matmul(A, B)
+            C_bytes = C.astype('<i4').tobytes()
+            print(f"C computed. Shape: {C.shape}", file=sys.stderr)
             
-            if result["success"]:
-                print("Submitting solution...", file=sys.stderr)
-                val = submit_solution(result["solution"])
-                print(f"Validation: {val}", file=sys.stderr)
+            # Fast mining loop - vary nonce, hash quickly
+            best_bits = 0
+            best_solution = None
+            seed_arr = bytearray(seed)
+            start_time = time.time()
+            
+            for nonce in range(args.iterations):
+                struct.pack_into('<Q', seed_arr, 228, nonce)
+                solution = bytes(seed_arr) + C_bytes
+                h = blake3_hash(solution)
+                bits = check_difficulty(h, difficulty)
+                
+                if bits > best_bits:
+                    best_bits = bits
+                    best_solution = solution
+                    elapsed = time.time() - start_time
+                    rate = (nonce + 1) / elapsed if elapsed > 0 else 0
+                    print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.0f} H/s", file=sys.stderr)
+                
+                if bits >= difficulty:
+                    print("SOLUTION FOUND!", file=sys.stderr)
+                    val = submit_solution(best_solution)
+                    print(f"Validation: {val}", file=sys.stderr)
+                    break
+                
+                if (nonce + 1) % 100000 == 0:
+                    elapsed = time.time() - start_time
+                    rate = (nonce + 1) / elapsed if elapsed > 0 else 0
+                    print(f"Hashes: {nonce+1}, Rate: {rate:.0f} H/s, Best: {best_bits} bits", file=sys.stderr)
             
             if not args.loop:
                 break
