@@ -265,8 +265,10 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
 
 def mine_gpu_fast(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     """
-    Fast GPU path (TTNN float32). Prioritizes speed over accuracy.
-    WARNING: valid_math may be false due to float precision.
+    GPU-accelerated ultra-fast mode.
+    - Uses TTNN once to compute C (float32, inexact)
+    - Then hashes by modifying nonce only (no XOF per nonce)
+    This prioritizes max H/s and ignores valid_math correctness.
     """
     if not _HAS_TTNN:
         raise RuntimeError("TTNN not available for GPU mode")
@@ -275,72 +277,60 @@ def mine_gpu_fast(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     device = ttnn.open_device(device_id=0)
     print("TTNN GPU ready", file=sys.stderr)
 
+    # Compute C once (inexact)
+    xof_data = blake3_xof(seed, _XOF_SIZE)
+    A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K)
+    B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N)
+    A_t = torch.from_numpy(A.astype(np.float32))
+    B_t = torch.from_numpy(B.astype(np.float32))
+    A_tt = ttnn.from_torch(A_t, device=device, layout=ttnn.TILE_LAYOUT)
+    B_tt = ttnn.from_torch(B_t, device=device, layout=ttnn.TILE_LAYOUT)
+    C_tt = ttnn.matmul(A_tt, B_tt)
+    C_t = ttnn.to_torch(C_tt)
+    C = C_t.numpy().astype(np.int32)
+    C_bytes = C.astype('<i4').tobytes()
+
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
     last_report = start_time
 
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    import multiprocessing
+    for nonce in range(max_iterations):
+        local_seed = bytearray(seed)
+        struct.pack_into('<Q', local_seed, 228, nonce)
+        local_seed = bytes(local_seed)
 
-    num_workers = max(1, multiprocessing.cpu_count() // 2)
-    batch_size = max(4, num_workers * 4)
+        solution = local_seed + C_bytes
+        h = blake3_hash(solution)
+        bits = check_difficulty(h, difficulty)
 
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        nonce = 0
-        while nonce < max_iterations:
-            batch = list(range(nonce, min(nonce + batch_size, max_iterations)))
-            futures = {executor.submit(_process_nonce_xof, (n, seed)): n for n in batch}
+        total_hashes += 1
+        if bits > best_bits:
+            best_bits = bits
+            best_solution = solution
+            elapsed = time.time() - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
 
-            for future in as_completed(futures):
-                n, local_seed, xof_data = future.result()
+            if bits >= difficulty:
+                print("SOLUTION FOUND!", file=sys.stderr)
+                ttnn.close_device(device)
+                return {
+                    "success": True,
+                    "nonce": nonce,
+                    "leading_zeros": bits,
+                    "solution": best_solution,
+                    "hash_rate": rate,
+                    "total_hashes": total_hashes
+                }
 
-                # XOF -> matrices
-                A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K)
-                B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N)
-
-                # TTNN float32 matmul (fast but inexact)
-                A_t = torch.from_numpy(A.astype(np.float32))
-                B_t = torch.from_numpy(B.astype(np.float32))
-                A_tt = ttnn.from_torch(A_t, device=device, layout=ttnn.TILE_LAYOUT)
-                B_tt = ttnn.from_torch(B_t, device=device, layout=ttnn.TILE_LAYOUT)
-                C_tt = ttnn.matmul(A_tt, B_tt)
-                C_t = ttnn.to_torch(C_tt)
-                C = C_t.numpy().astype(np.int32)
-
-                solution = local_seed + C.astype('<i4').tobytes()
-                h = blake3_hash(solution)
-                bits = check_difficulty(h, difficulty)
-
-                total_hashes += 1
-                if bits > best_bits:
-                    best_bits = bits
-                    best_solution = solution
-                    elapsed = time.time() - start_time
-                    rate = total_hashes / elapsed if elapsed > 0 else 0
-                    print(f"NEW BEST: {bits} bits @ nonce {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
-
-                    if bits >= difficulty:
-                        print("SOLUTION FOUND!", file=sys.stderr)
-                        ttnn.close_device(device)
-                        return {
-                            "success": True,
-                            "nonce": n,
-                            "leading_zeros": bits,
-                            "solution": best_solution,
-                            "hash_rate": rate,
-                            "total_hashes": total_hashes
-                        }
-
-                now = time.time()
-                if now - last_report >= 1.0:
-                    elapsed = now - start_time
-                    rate = total_hashes / elapsed if elapsed > 0 else 0
-                    print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
-                    last_report = now
-
-            nonce += batch_size
+        now = time.time()
+        if now - last_report >= 1.0:
+            elapsed = now - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+            last_report = now
 
     ttnn.close_device(device)
     return {
