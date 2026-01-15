@@ -15,7 +15,7 @@ except ImportError as e:
     sys.exit(1)
 
 M, K, N = 16, 50240, 16
-CHUNK_SIZE = 500  # Safe for float32 precision
+CHUNK_SIZE = 64  # Much smaller for exact float32 precision
 
 def chunked_matmul_gpu(device, A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
