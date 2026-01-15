@@ -15,6 +15,14 @@ import json
 # Use OpenBLAS via NumPy
 import numpy as np
 
+# Optional GPU path (TTNN float32 - faster but may be inaccurate)
+try:
+    import ttnn
+    import torch
+    _HAS_TTNN = True
+except Exception:
+    _HAS_TTNN = False
+
 # Import blake3
 try:
     import blake3
@@ -109,7 +117,7 @@ def _process_nonce(nonce):
     A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K).astype(np.int32)
     B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N).astype(np.int32)
     
-    # OpenBLAS matmul
+    # OpenBLAS matmul (default, exact)
     C = np.dot(A, B)
     
     # Solution
@@ -179,7 +187,7 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     total_hashes = 0
     start_time = time.time()
     
-    # Validate first one to confirm valid_math
+    # Validate first one to confirm valid_math (GPU path may be invalid)
     import base58
     nonce, bits, solution = _process_nonce(0)
     total_hashes += 1
@@ -244,11 +252,88 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     }
 
 
+def mine_gpu_fast(seed: bytes, difficulty: int, max_iterations: int = 10000000):
+    """
+    Fast GPU path (TTNN float32). Prioritizes speed over accuracy.
+    WARNING: valid_math may be false due to float precision.
+    """
+    if not _HAS_TTNN:
+        raise RuntimeError("TTNN not available for GPU mode")
+
+    print("Initializing TTNN GPU...", file=sys.stderr)
+    device = ttnn.open_device(device_id=0)
+    print("TTNN GPU ready", file=sys.stderr)
+
+    best_bits = 0
+    best_solution = None
+    total_hashes = 0
+    start_time = time.time()
+    last_report = start_time
+
+    for nonce in range(max_iterations):
+        local_seed = bytearray(seed)
+        struct.pack_into('<Q', local_seed, 228, nonce)
+        local_seed = bytes(local_seed)
+
+        # XOF + matrices
+        xof_data = blake3_xof(local_seed, _XOF_SIZE)
+        A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K)
+        B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N)
+
+        # TTNN float32 matmul (fast but inexact)
+        A_t = torch.from_numpy(A.astype(np.float32))
+        B_t = torch.from_numpy(B.astype(np.float32))
+        A_tt = ttnn.from_torch(A_t, device=device, layout=ttnn.TILE_LAYOUT)
+        B_tt = ttnn.from_torch(B_t, device=device, layout=ttnn.TILE_LAYOUT)
+        C_tt = ttnn.matmul(A_tt, B_tt)
+        C_t = ttnn.to_torch(C_tt)
+        C = C_t.numpy().astype(np.int32)
+
+        solution = local_seed + C.astype('<i4').tobytes()
+        h = blake3_hash(solution)
+        bits = check_difficulty(h, difficulty)
+
+        total_hashes += 1
+        if bits > best_bits:
+            best_bits = bits
+            best_solution = solution
+            elapsed = time.time() - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
+
+            if bits >= difficulty:
+                print("SOLUTION FOUND!", file=sys.stderr)
+                ttnn.close_device(device)
+                return {
+                    "success": True,
+                    "nonce": nonce,
+                    "leading_zeros": bits,
+                    "solution": best_solution,
+                    "hash_rate": rate,
+                    "total_hashes": total_hashes
+                }
+
+        now = time.time()
+        if now - last_report >= 1.0:
+            elapsed = now - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+            last_report = now
+
+    ttnn.close_device(device)
+    return {
+        "success": False,
+        "best_bits": best_bits,
+        "total_hashes": total_hashes
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="HardHack OpenBLAS Miner")
     parser.add_argument("--iterations", type=int, default=10000000, help="Max iterations")
     parser.add_argument("--batch-size", type=int, default=10000, help="Batch size for progress updates")
     parser.add_argument("--loop", action="store_true", help="Run continuously")
+    parser.add_argument("--gpu", action="store_true", help="Use TTNN GPU (fast, may be invalid)")
     args = parser.parse_args()
     
     # Check OpenBLAS and tune threading
@@ -281,7 +366,11 @@ def main():
             
             # Mine (matrices generated per-nonce inside)
             print("Mining...", file=sys.stderr)
-            result = mine_correct(seed, difficulty, args.iterations)
+            if args.gpu:
+                print("[!] GPU mode prioritizes speed over accuracy; valid_math may be false", file=sys.stderr)
+                result = mine_gpu_fast(seed, difficulty, args.iterations)
+            else:
+                result = mine_correct(seed, difficulty, args.iterations)
             
             if result["success"]:
                 # Submit solution
