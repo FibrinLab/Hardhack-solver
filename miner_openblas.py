@@ -97,60 +97,65 @@ def build_solution(seed: bytes, C: np.ndarray) -> bytes:
     return seed + C_bytes
 
 
-def mine_batch(seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int, 
-               batch_size: int = 10000, max_iterations: int = 10000000):
+def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     """
-    Mine - compute C once, vary nonce in seed for different hashes
+    Mine with correct matrix recomputation per nonce.
+    Each nonce changes the seed, which changes A, B, and C.
     """
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
     
-    # Compute C = A @ B once (16x50240 @ 50240x16 = 16x16)
-    C = np.dot(A, B)
-    C_bytes = C.astype('<i4').tobytes()
+    # Constants
+    M, K, N = 16, 50240, 16
     
+    seed_arr = bytearray(seed)
     nonce = 0
+    
     while nonce < max_iterations:
-        # Process batch
-        for _ in range(batch_size):
-            # Modify seed with nonce (inject into last 12 bytes - the random nonce portion)
-            modified_seed = bytearray(seed)
-            nonce_bytes = struct.pack('<Q', nonce)
-            modified_seed[-12:-4] = nonce_bytes
-            modified_seed = bytes(modified_seed)
-            
-            # Build solution: seed (240) + C (1024) = 1264 bytes
-            solution = modified_seed + C_bytes
-            solution_hash = blake3_hash(solution)
-            
-            leading_zeros = check_difficulty(solution_hash, difficulty)
-            
-            if leading_zeros > best_bits:
-                best_bits = leading_zeros
-                best_solution = solution
-                
-                if leading_zeros >= difficulty:
-                    elapsed = time.time() - start_time
-                    rate = total_hashes / elapsed if elapsed > 0 else 0
-                    print(f"FOUND! Nonce: {nonce}, Bits: {leading_zeros}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                    return {
-                        "success": True,
-                        "nonce": nonce,
-                        "leading_zeros": leading_zeros,
-                        "solution": best_solution,
-                        "hash_rate": rate,
-                        "total_hashes": total_hashes
-                    }
-            
-            nonce += 1
-            total_hashes += 1
+        # Update nonce in seed (bytes 228-236 for 8-byte nonce)
+        struct.pack_into('<Q', seed_arr, 228, nonce)
+        current_seed = bytes(seed_arr)
         
-        # Progress update
-        elapsed = time.time() - start_time
-        rate = total_hashes / elapsed if elapsed > 0 else 0
-        print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+        # Generate matrices from this seed
+        A, B = seed_to_matrices(current_seed)
+        
+        # Compute C = A @ B
+        C = np.dot(A, B)
+        
+        # Build solution
+        solution = build_solution(current_seed, C)
+        solution_hash = blake3_hash(solution)
+        
+        leading_zeros = check_difficulty(solution_hash, difficulty)
+        
+        if leading_zeros > best_bits:
+            best_bits = leading_zeros
+            best_solution = solution
+            print(f"New best: {leading_zeros} bits at nonce {nonce}", file=sys.stderr)
+            
+            if leading_zeros >= difficulty:
+                elapsed = time.time() - start_time
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"FOUND! Nonce: {nonce}, Bits: {leading_zeros}, Rate: {rate:.1f} H/s", file=sys.stderr)
+                return {
+                    "success": True,
+                    "nonce": nonce,
+                    "leading_zeros": leading_zeros,
+                    "solution": best_solution,
+                    "hash_rate": rate,
+                    "total_hashes": total_hashes
+                }
+        
+        nonce += 1
+        total_hashes += 1
+        
+        # Progress every 10 hashes (will be slow due to XOF + matmul)
+        if total_hashes % 10 == 0:
+            elapsed = time.time() - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
     
     return {
         "success": False,
@@ -186,14 +191,9 @@ def main():
             difficulty = fetch_difficulty()
             print(f"Difficulty: {difficulty} bits", file=sys.stderr)
             
-            # Generate matrices
-            print("Generating matrices...", file=sys.stderr)
-            A, B = seed_to_matrices(seed)
-            print(f"Matrix A: {A.shape}, Matrix B: {B.shape}", file=sys.stderr)
-            
-            # Mine
+            # Mine (matrices generated per-nonce inside)
             print("Mining...", file=sys.stderr)
-            result = mine_batch(seed, A, B, difficulty, args.batch_size, args.iterations)
+            result = mine_correct(seed, difficulty, args.iterations)
             
             if result["success"]:
                 # Submit solution
