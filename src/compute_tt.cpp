@@ -1,6 +1,7 @@
 #include "compute.h"
 #include <iostream>
 #include <vector>
+#include <algorithm>
 
 #ifdef ENABLE_TT
 #include <tt_stl/span.hpp>
@@ -47,11 +48,12 @@ public:
         // Get Command Queue
         CommandQueue& cq = device_->command_queue();
 
-        // 2. Define Tile Constants
-        // Tenstorrent works with 32x32 tiles.
-        // Assuming the input data is already formatted or can be treated as tiles.
-        uint32_t single_tile_size = 32 * 32; // 1024 bytes for uint8
-        uint32_t num_tiles = 1; // Adjust based on actual input size if needed
+        // 2. Define Tile Constants (32x32 tiles)
+        constexpr uint32_t tile_hw = 32;
+        uint32_t single_tile_size = tile_hw * tile_hw; // 1024 bytes per tile (uint8/int8)
+
+        // K dimension is 50240 -> 50240 / 32 = 1570 tiles
+        uint32_t num_tiles = (K + tile_hw - 1) / tile_hw; // 1570
         uint32_t buffer_size = single_tile_size * num_tiles;
 
         // 3. Create DRAM Buffers
@@ -66,9 +68,37 @@ public:
         std::shared_ptr<Buffer> src1_dram_buffer = CreateBuffer(config);
         std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(config);
 
-        // 4. Write Input Data to Device
-        std::vector<uint8_t> src0_vec(A, A + buffer_size);
-        std::vector<uint8_t> src1_vec((uint8_t*)B, (uint8_t*)B + buffer_size);
+        // 4. Pack input into tiles (32x32)
+        // A is 16x50240 (u8) -> pad to 32 rows
+        // B is 50240x16 (i8) -> pad to 32 cols
+        std::vector<uint8_t> src0_vec(buffer_size, 0);
+        std::vector<uint8_t> src1_vec(buffer_size, 0);
+
+        for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+            uint32_t k_start = tile_idx * tile_hw;
+            uint32_t k_end = std::min(k_start + tile_hw, (uint32_t)K);
+
+            // A tile: rows 0-15 (pad 16-31), cols k_start..k_end
+            for (uint32_t i = 0; i < 16; ++i) {
+                for (uint32_t k = k_start; k < k_end; ++k) {
+                    uint32_t tile_row = i;
+                    uint32_t tile_col = k - k_start;
+                    uint32_t tile_offset = tile_idx * single_tile_size + tile_row * tile_hw + tile_col;
+                    src0_vec[tile_offset] = A[i * K + k];
+                }
+            }
+
+            // B tile: rows k_start..k_end, cols 0-15 (pad 16-31)
+            for (uint32_t k = k_start; k < k_end; ++k) {
+                for (uint32_t j = 0; j < 16; ++j) {
+                    uint32_t tile_row = k - k_start;
+                    uint32_t tile_col = j;
+                    uint32_t tile_offset = tile_idx * single_tile_size + tile_row * tile_hw + tile_col;
+                    // Preserve signed bit pattern in uint8 container
+                    src1_vec[tile_offset] = static_cast<uint8_t>(B[k * N + j]);
+                }
+            }
+        }
 
         EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
         EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
@@ -84,7 +114,7 @@ public:
             .set_page_size(cb_index_in0, single_tile_size);
         CreateCircularBuffer(program, core, cb_src0_config);
 
-        CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{cb_index_in1, tt::DataFormat::UInt8}}) // handling int8 as uint8 for transport
+        CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{cb_index_in1, tt::DataFormat::Int8}})
             .set_page_size(cb_index_in1, single_tile_size);
         CreateCircularBuffer(program, core, cb_src1_config);
 
@@ -146,12 +176,16 @@ public:
         EnqueueProgram(cq, program, false);
         Finish(cq);
 
-        // 9. Read Results
-        std::vector<int32_t> result_vec;
+        // 9. Read Results (one 32x32 tile)
+        std::vector<int32_t> result_vec((tile_hw * tile_hw), 0);
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
-        
-        // Copy back to output pointer
-        std::memcpy(C, result_vec.data(), buffer_size * sizeof(int32_t));
+
+        // Copy back top-left 16x16 into C
+        for (uint32_t i = 0; i < 16; ++i) {
+            for (uint32_t j = 0; j < 16; ++j) {
+                C[i * N + j] = result_vec[i * tile_hw + j];
+            }
+        }
     }
 
     std::string name() const override { return "Tenstorrent (INT32 Dot-Product)"; }
