@@ -283,29 +283,41 @@ def main():
             seed_arr = bytearray(seed)
             start_time = time.time()
             
-            for nonce in range(args.iterations):
-                struct.pack_into('<Q', seed_arr, 228, nonce)
-                solution = bytes(seed_arr) + C_bytes
-                h = blake3_hash(solution)
-                bits = check_difficulty(h, difficulty)
-                
-                if bits > best_bits:
-                    best_bits = bits
-                    best_solution = solution
-                    elapsed = time.time() - start_time
-                    rate = (nonce + 1) / elapsed if elapsed > 0 else 0
-                    print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.0f} H/s", file=sys.stderr)
-                
-                if bits >= difficulty:
-                    print("SOLUTION FOUND!", file=sys.stderr)
-                    val = submit_solution(best_solution)
-                    print(f"Validation: {val}", file=sys.stderr)
-                    break
-                
-                if (nonce + 1) % 100000 == 0:
-                    elapsed = time.time() - start_time
-                    rate = (nonce + 1) / elapsed if elapsed > 0 else 0
-                    print(f"Hashes: {nonce+1}, Rate: {rate:.0f} H/s, Best: {best_bits} bits", file=sys.stderr)
+            # Submit with ORIGINAL seed (for valid_math)
+            original_solution = seed + C_bytes
+            original_hash = blake3_hash(original_solution)
+            original_bits = check_difficulty(original_hash, difficulty)
+            print(f"Original seed: {original_bits} bits", file=sys.stderr)
+            
+            if original_bits >= difficulty:
+                print("SOLUTION FOUND with original seed!", file=sys.stderr)
+                val = submit_solution(original_solution)
+                print(f"Validation: {val}", file=sys.stderr)
+            else:
+                # Keep hashing with modified nonces to find good hash
+                # But when we find one, we'll need a new seed anyway
+                for nonce in range(args.iterations):
+                    struct.pack_into('<Q', seed_arr, 228, nonce)
+                    solution = bytes(seed_arr) + C_bytes
+                    h = blake3_hash(solution)
+                    bits = check_difficulty(h, difficulty)
+                    
+                    if bits > best_bits:
+                        best_bits = bits
+                        elapsed = time.time() - start_time
+                        rate = (nonce + 1) / elapsed if elapsed > 0 else 0
+                        print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.0f} H/s", file=sys.stderr)
+                    
+                    if bits >= difficulty:
+                        # Found good hash but can't use it (wrong math)
+                        # Fetch new seed and try with that
+                        print(f"Found {bits} bits - fetching fresh seed...", file=sys.stderr)
+                        break
+                    
+                    if (nonce + 1) % 100000 == 0:
+                        elapsed = time.time() - start_time
+                        rate = (nonce + 1) / elapsed if elapsed > 0 else 0
+                        print(f"Hashes: {nonce+1}, Rate: {rate:.0f} H/s, Best: {best_bits} bits", file=sys.stderr)
             
             if not args.loop:
                 break
