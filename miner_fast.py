@@ -64,6 +64,8 @@ class TTNNMiner:
         print("Initializing TTNN GPU...", file=sys.stderr)
         self.device = ttnn.open_device(device_id=device_id)
         print(f"TTNN GPU ready on device {device_id}", file=sys.stderr)
+        # Batch size for pipelined processing
+        self.batch_size = 64
     
     def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
         """GPU matmul"""
@@ -80,54 +82,72 @@ class TTNNMiner:
     
     def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
         """
-        FAST MODE: Compute C once, vary nonce in seed for hashing.
-        This gave 400k H/s with valid_math: true
+        Correct math + faster pipeline:
+        - CPU threads generate XOF/A/B for a batch of nonces
+        - Single batched GPU matmul
+        - Hash/verify on CPU
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         best_bits = 0
         best_solution = None
         total_hashes = 0
         start_time = time.time()
-        
-        # Compute matrices and C ONCE from original seed
-        xof_data = blake3_xof(seed, XOF_SIZE)
-        A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K)
-        B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N)
-        
-        print("Computing matmul on GPU...", file=sys.stderr)
-        C = self.matmul(A, B)
-        C_bytes = C.astype('<i4').tobytes()
-        print(f"Matmul done. C shape: {C.shape}", file=sys.stderr)
-        
-        # Now just vary nonce and hash - FAST!
-        seed_arr = bytearray(seed)
-        
-        for nonce in range(max_iterations):
-            # Update nonce in seed
+
+        batch_size = self.batch_size
+
+        def gen_one(nonce: int):
+            seed_arr = bytearray(seed)
             struct.pack_into('<Q', seed_arr, 228, nonce)
-            
-            # Solution = modified_seed + C (C stays same)
-            solution = bytes(seed_arr) + C_bytes
-            solution_hash = blake3_hash(solution)
-            leading_zeros = check_difficulty(solution_hash, difficulty)
-            
-            total_hashes += 1
-            
-            if leading_zeros > best_bits:
-                best_bits = leading_zeros
-                best_solution = solution
-                elapsed = time.time() - start_time
-                rate = total_hashes / elapsed if elapsed > 0 else 0
-                print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                
-                if leading_zeros >= difficulty:
-                    print(f"SOLUTION FOUND!", file=sys.stderr)
-                    return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce, "bits": leading_zeros}
-            
-            if total_hashes % 100000 == 0:
+            current_seed = bytes(seed_arr)
+            xof_data = blake3_xof(current_seed, XOF_SIZE)
+            A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K)
+            B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N)
+            return current_seed, A, B
+
+        nonce = 0
+        while nonce < max_iterations:
+            # Generate batch of A/B in parallel (blake3 is C-backed and releases GIL)
+            with ThreadPoolExecutor() as ex:
+                batch_data = list(ex.map(gen_one, range(nonce, min(nonce + batch_size, max_iterations))))
+
+            # Stack for batched GPU matmul
+            A_batch = np.stack([d[1] for d in batch_data]).astype(np.float32)
+            B_batch = np.stack([d[2] for d in batch_data]).astype(np.float32)
+
+            # GPU matmul per item (looped but all on GPU)
+            C_list = []
+            for i in range(A_batch.shape[0]):
+                C_list.append(self.matmul(A_batch[i], B_batch[i]))
+            C_batch = C_list
+
+            # Hash and check
+            for i, (current_seed, _, _) in enumerate(batch_data):
+                C = C_batch[i]
+                solution = current_seed + C.astype('<i4').tobytes()
+                solution_hash = blake3_hash(solution)
+                leading_zeros = check_difficulty(solution_hash, difficulty)
+
+                total_hashes += 1
+
+                if leading_zeros > best_bits:
+                    best_bits = leading_zeros
+                    best_solution = solution
+                    elapsed = time.time() - start_time
+                    rate = total_hashes / elapsed if elapsed > 0 else 0
+                    print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce+i}, Rate: {rate:.1f} H/s", file=sys.stderr)
+
+                    if leading_zeros >= difficulty:
+                        print("SOLUTION FOUND!", file=sys.stderr)
+                        return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce+i, "bits": leading_zeros}
+
+            nonce += batch_size
+
+            if total_hashes % 1000 == 0:
                 elapsed = time.time() - start_time
                 rate = total_hashes / elapsed if elapsed > 0 else 0
                 print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
-        
+
         return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
     
     def close(self):
