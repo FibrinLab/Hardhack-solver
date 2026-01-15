@@ -296,6 +296,9 @@ def mine_gpu_fast(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     start_time = time.time()
     last_report = start_time
 
+    # Print initial rate line so you can see it's running
+    print("Hashes: 0, Rate: 0.0 H/s, Best: 0 bits", file=sys.stderr)
+
     for nonce in range(max_iterations):
         local_seed = bytearray(seed)
         struct.pack_into('<Q', local_seed, 228, nonce)
