@@ -194,49 +194,54 @@ class TTNNMiner:
     
     def mine_fast(self, seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int, max_iterations: int = 100000000):
         """
-        FAST mining - matrices pre-computed by server, just vary nonce and hash
+        FAST mining with VALID MATH:
+        - Server gives us seed + matrices
+        - We compute C (matches server's computation)
+        - We submit seed + C (unmodified seed = valid_math: true)
+        - If not enough bits, get a new seed from server (new random nonce)
         """
-        best_bits = 0
-        best_solution = None
-        total_hashes = 0
         start_time = time.time()
+        total = 0
+        best_bits = 0
         
-        # Compute C once using GPU
-        print("Computing matmul...", file=sys.stderr)
-        C = self.matmul(A, B)
-        C_bytes = C.astype('<i4').tobytes()
-        print(f"C computed. Shape: {C.shape}", file=sys.stderr)
-        
-        seed_arr = bytearray(seed)
-        
-        for nonce in range(max_iterations):
-            # Update nonce
-            struct.pack_into('<Q', seed_arr, 228, nonce)
+        while total < max_iterations:
+            # Compute C using NumPy/OpenBLAS
+            C = np.matmul(A.astype(np.int32), B.astype(np.int32))
+            C_bytes = C.astype('<i4').tobytes()
             
-            # Hash solution (seed with nonce + C)
-            solution = bytes(seed_arr) + C_bytes
+            # Build solution with ORIGINAL seed
+            solution = seed + C_bytes
             solution_hash = blake3_hash(solution)
             leading_zeros = check_difficulty(solution_hash, difficulty)
             
-            total_hashes += 1
+            total += 1
             
             if leading_zeros > best_bits:
                 best_bits = leading_zeros
-                best_solution = solution
                 elapsed = time.time() - start_time
-                rate = total_hashes / elapsed if elapsed > 0 else 0
-                print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                
-                if leading_zeros >= difficulty:
-                    print("SOLUTION FOUND!", file=sys.stderr)
-                    return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce, "bits": leading_zeros}
+                rate = total / elapsed if elapsed > 0 else 0
+                print(f"NEW BEST: {leading_zeros} bits, Rate: {rate:.1f} seeds/s", file=sys.stderr)
             
-            if total_hashes % 100000 == 0:
+            if leading_zeros >= difficulty:
                 elapsed = time.time() - start_time
-                rate = total_hashes / elapsed if elapsed > 0 else 0
-                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+                rate = total / elapsed if elapsed > 0 else 0
+                print(f"SOLUTION FOUND! {leading_zeros} bits after {total} seeds", file=sys.stderr)
+                return {"success": True, "solution": solution, "rate": rate, "bits": leading_zeros}
+            
+            # Get new seed from server (has new random nonce)
+            try:
+                seed, A, B = fetch_seed_with_matrices()
+            except Exception as e:
+                print(f"Fetch error: {e}", file=sys.stderr)
+                time.sleep(0.1)
+                continue
+            
+            if total % 100 == 0:
+                elapsed = time.time() - start_time
+                rate = total / elapsed if elapsed > 0 else 0
+                print(f"Seeds: {total}, Rate: {rate:.1f}/s, Best: {best_bits} bits", file=sys.stderr)
         
-        return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
+        return {"success": False, "best_bits": best_bits, "total_hashes": total}
     
     def close(self):
         ttnn.close_device(self.device)
