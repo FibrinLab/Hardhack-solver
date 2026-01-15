@@ -58,21 +58,23 @@ def submit_solution(solution: bytes) -> dict:
 def seed_to_matrices(seed: bytes):
     """
     Generate matrices A (16x50240) and B (50240x16) from seed using BLAKE3 XOF
-    This matches the server's matrix generation
+    Per specs: A is u8, B is i8, C is i32
+    Dimensions: 16 x 50240 x 16
     """
     # Generate matrix data using BLAKE3 XOF
     # Server uses: Blake3.finalize_xof(b, 16*50240 + 50240*16)
-    matrix_size = 16 * 50240 + 50240 * 16  # Total bytes needed
+    a_size = 16 * 50240  # 802,840 bytes
+    b_size = 50240 * 16  # 803,840 bytes
+    matrix_size = a_size + b_size
     matrix_data = blake3_xof(seed, matrix_size)
     
     # Split into A and B
-    a_size = 16 * 50240
     a_data = matrix_data[:a_size]
     b_data = matrix_data[a_size:]
     
-    # Convert to numpy arrays (uint8 for A, int8 for B based on typical specs)
-    A = np.frombuffer(a_data, dtype=np.uint8).reshape(16, 50240).astype(np.float32)
-    B = np.frombuffer(b_data, dtype=np.uint8).reshape(50240, 16).astype(np.float32)
+    # A is unsigned u8, B is signed i8
+    A = np.frombuffer(a_data, dtype=np.uint8).reshape(16, 50240).astype(np.int32)
+    B = np.frombuffer(b_data, dtype=np.int8).reshape(50240, 16).astype(np.int32)
     
     return A, B
 
@@ -85,48 +87,45 @@ def check_difficulty(hash_bytes: bytes, difficulty_bits: int) -> int:
     return 256 - hash_int.bit_length()
 
 
-def build_solution(seed: bytes, nonce: int, C: np.ndarray) -> bytes:
-    """Build solution bytes for submission"""
-    # Solution format: seed + nonce + C_matrix
-    nonce_bytes = struct.pack('<Q', nonce)  # 8-byte little-endian nonce
-    C_bytes = C.astype(np.int32).tobytes()
-    return seed + nonce_bytes + C_bytes
+def build_solution(seed: bytes, C: np.ndarray) -> bytes:
+    """
+    Build solution bytes for submission
+    Per specs: 240 bytes (seed) + 1024 bytes (C matrix) = 1264 bytes
+    C is 16x16 i32 little-endian
+    """
+    C_bytes = C.astype('<i4').tobytes()  # Little-endian int32
+    return seed + C_bytes
 
 
 def mine_batch(seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int, 
                batch_size: int = 1000, max_iterations: int = 10000000):
     """
     Mine using batched operations for better performance
+    Each nonce changes the seed, which changes matrices A and B
     """
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
     
-    # Pre-compute base matrix multiplication (doesn't change with nonce)
-    # C = A @ B (16x16 result)
-    C_base = np.dot(A, B)
-    
     nonce = 0
     while nonce < max_iterations:
         # Process batch
         for _ in range(batch_size):
-            # Modify seed with nonce
+            # Modify seed with nonce (inject into last 12 bytes - the random nonce portion)
             modified_seed = bytearray(seed)
-            # Inject nonce into the random nonce portion (last 12 bytes)
             nonce_bytes = struct.pack('<Q', nonce)
             modified_seed[-12:-4] = nonce_bytes
             modified_seed = bytes(modified_seed)
             
-            # Regenerate matrices with modified seed (for proper nonce variation)
-            # For speed, we'll hash the result with nonce instead
+            # Regenerate matrices with modified seed
+            A, B = seed_to_matrices(modified_seed)
             
-            # Create solution hash
-            C_with_nonce = C_base.copy()
-            # Add nonce influence to result
-            C_with_nonce[0, 0] += nonce
+            # Compute C = A @ B (16x50240 @ 50240x16 = 16x16)
+            C = np.dot(A, B)
             
-            solution = build_solution(modified_seed, nonce, C_with_nonce)
+            # Build solution: seed (240) + C (1024) = 1264 bytes
+            solution = build_solution(modified_seed, C)
             solution_hash = blake3_hash(solution)
             
             leading_zeros = check_difficulty(solution_hash, difficulty)
