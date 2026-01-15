@@ -3,6 +3,8 @@
 #include <cstring>
 #include <chrono>
 #include <omp.h>
+#include <iostream>
+#include <iomanip>
 
 Miner::Miner(std::unique_ptr<ComputeDevice> device) : device_(std::move(device)) {}
 
@@ -23,6 +25,8 @@ MiningResult Miner::mine(const std::vector<uint8_t>& rpc_seed, int difficulty_bi
 
     MiningResult final_res = {false, {}, {}, 0, 0};
     bool found_global = false;
+    uint64_t total_iterations = 0;
+    auto last_progress = std::chrono::high_resolution_clock::now();
 
     #pragma omp parallel
     {
@@ -43,6 +47,7 @@ MiningResult Miner::mine(const std::vector<uint8_t>& rpc_seed, int difficulty_bi
 
         blake3_hasher hasher;
         uint8_t h_out[BLAKE3_OUT_LEN];
+        uint64_t local_iterations = 0;
 
         for (uint64_t i = 0; i < (max_iterations / num_threads) && !found_global; ++i) {
             (*n_low)++;
@@ -73,6 +78,34 @@ MiningResult Miner::mine(const std::vector<uint8_t>& rpc_seed, int difficulty_bi
                     }
                 }
             }
+
+            local_iterations++;
+            
+            // Progress reporting every 1M iterations (thread 0 only)
+            if (thread_id == 0 && (local_iterations % 1000000 == 0)) {
+                #pragma omp critical
+                {
+                    total_iterations += 1000000 * num_threads;
+                    auto now = std::chrono::high_resolution_clock::now();
+                    auto elapsed = std::chrono::duration<double>(now - last_progress).count();
+                    if (elapsed >= 5.0) {  // Report every 5 seconds
+                        double total_elapsed = std::chrono::duration<double>(now - start).count();
+                        double hps = total_iterations / elapsed;
+                        double expected_hashes = 1ULL << difficulty_bits;
+                        double progress = std::min(100.0, (total_iterations * 100.0) / expected_hashes);
+                        std::cerr << "[Progress] " << (total_iterations / 1000000) << "M hashes, "
+                                  << (int)hps << " H/s, ~" << std::fixed << std::setprecision(1) 
+                                  << progress << "% expected" << std::endl;
+                        last_progress = now;
+                        total_iterations = 0;
+                    }
+                }
+            }
+        }
+
+        #pragma omp critical
+        {
+            final_res.iterations += local_iterations;
         }
     }
 

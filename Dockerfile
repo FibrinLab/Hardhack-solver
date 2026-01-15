@@ -1,23 +1,24 @@
-# Production Tenstorrent Base Image
-FROM ghcr.io/tenstorrent/tt-xla/tt-xla-ird-ubuntu-22-04:latest
+# syntax=docker/dockerfile:1
+FROM ubuntu:22.04
 
-USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install curl for API communication
-RUN apt-get update && apt-get install -y \
-    build-essential cmake git curl openssl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    xxd \
+    libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
 
-# Build high-performance binary
-RUN mkdir build && cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=ON && \
-    make -j$(nproc)
+# Build without TT acceleration (CPU-only mode for now)
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_TT=OFF \
+    && cmake --build build -j"$(nproc)"
 
-RUN chmod +x testnet_agent.sh
+RUN chmod +x mine.sh merkle_prove.sh
 
-ENV TT_METAL_HOME=/opt/tt-metal
-ENTRYPOINT ["./testnet_agent.sh"]
+ENTRYPOINT ["./mine.sh"]
