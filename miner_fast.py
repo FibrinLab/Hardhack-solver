@@ -77,7 +77,7 @@ class TTNNMiner:
         print("Initializing TTNN GPU...", file=sys.stderr)
         self.device = ttnn.open_device(device_id=device_id)
         self.num_workers = num_workers or multiprocessing.cpu_count()
-        self.batch_size = self.num_workers * 256  # Large batch for OpenBLAS efficiency
+        self.batch_size = 64  # Smaller batch, faster turnaround
         print(f"TTNN GPU ready. Workers: {self.num_workers}, Batch: {self.batch_size}", file=sys.stderr)
     
     def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -93,23 +93,18 @@ class TTNNMiner:
         
         return C_t.numpy().astype(np.int32)
     
-    def matmul_batch(self, A_batch: np.ndarray, B_batch: np.ndarray) -> list:
+    def matmul_batch(self, A_batch: np.ndarray, B_batch: np.ndarray) -> np.ndarray:
         """
-        Batched matmul using NumPy/OpenBLAS - highly optimized
-        Uses np.einsum or np.matmul with broadcasting
+        Batched matmul using NumPy/OpenBLAS
         """
-        batch = A_batch.shape[0]
-        
-        # Use numpy's optimized matmul (backed by OpenBLAS/MKL)
-        # np.matmul handles batch dimensions automatically
-        A = A_batch.astype(np.float64)  # float64 for precision
-        B = B_batch.astype(np.float64)
+        # Use int32 directly to avoid float conversion overhead
+        A = A_batch.astype(np.int32)
+        B = B_batch.astype(np.int32)
         
         # Batched matmul: (batch, 16, 50240) @ (batch, 50240, 16) = (batch, 16, 16)
         C = np.matmul(A, B)
         
-        # Return as list of int32 arrays
-        return [C[i].astype(np.int32) for i in range(batch)]
+        return C  # Already int32
     
     def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
         """
@@ -148,7 +143,7 @@ class TTNNMiner:
                 for i, (current_seed, _, _) in enumerate(batch_data):
                     C = C_batch[i]
                     
-                    solution = current_seed + C.astype('<i4').tobytes()
+                    solution = current_seed + C.astype('<i4').tobytes()  # Little-endian int32
                     solution_hash = blake3_hash(solution)
                     leading_zeros = check_difficulty(solution_hash, difficulty)
 
