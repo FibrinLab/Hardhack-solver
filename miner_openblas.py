@@ -87,6 +87,34 @@ def check_difficulty(hash_bytes: bytes, difficulty_bits: int) -> int:
     return 256 - hash_int.bit_length()
 
 
+# Global for multiprocessing (can't pickle local functions)
+_M, _K, _N = 16, 50240, 16
+_XOF_SIZE = _M * _K + _K * _N
+_BASE_SEED = None
+_DIFFICULTY = None
+
+def _process_nonce(nonce):
+    """Process single nonce - must be global for multiprocessing"""
+    local_seed = bytearray(_BASE_SEED)
+    struct.pack_into('<Q', local_seed, 228, nonce)
+    local_seed = bytes(local_seed)
+    
+    # XOF + matrices
+    xof_data = blake3_xof(local_seed, _XOF_SIZE)
+    A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K).astype(np.int32)
+    B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N).astype(np.int32)
+    
+    # OpenBLAS matmul
+    C = np.dot(A, B)
+    
+    # Solution
+    solution = local_seed + C.astype('<i4').tobytes()
+    h = blake3_hash(solution)
+    bits = check_difficulty(h, _DIFFICULTY)
+    
+    return nonce, bits, solution
+
+
 def build_solution(seed: bytes, C: np.ndarray) -> bytes:
     """
     Build solution bytes for submission
@@ -135,43 +163,22 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     Fast mining with OpenBLAS-accelerated matmul.
     Uses multiprocessing for parallel hashing.
     """
+    global _BASE_SEED, _DIFFICULTY
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import multiprocessing
+    
+    # Set globals for worker processes
+    _BASE_SEED = seed
+    _DIFFICULTY = difficulty
     
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
     
-    M, K, N = 16, 50240, 16
-    xof_size = M * K + K * N
-    
-    # Pre-allocate
-    seed_arr = bytearray(seed)
-    
-    def process_nonce(nonce):
-        local_seed = bytearray(seed)
-        struct.pack_into('<Q', local_seed, 228, nonce)
-        local_seed = bytes(local_seed)
-        
-        # XOF + matrices
-        xof_data = blake3_xof(local_seed, xof_size)
-        A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K).astype(np.int32)
-        B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N).astype(np.int32)
-        
-        # OpenBLAS matmul
-        C = np.dot(A, B)
-        
-        # Solution
-        solution = local_seed + C.astype('<i4').tobytes()
-        h = blake3_hash(solution)
-        bits = check_difficulty(h, difficulty)
-        
-        return nonce, bits, solution
-    
     # Validate first one to confirm valid_math
     import base58
-    nonce, bits, solution = process_nonce(0)
+    nonce, bits, solution = _process_nonce(0)
     total_hashes += 1
     best_bits = bits
     best_solution = solution
@@ -193,7 +200,7 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     
     while nonce < max_iterations:
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(process_nonce, n): n for n in range(nonce, min(nonce + batch_size, max_iterations))}
+            futures = {executor.submit(_process_nonce, n): n for n in range(nonce, min(nonce + batch_size, max_iterations))}
             
             for future in as_completed(futures):
                 n, bits, sol = future.result()
