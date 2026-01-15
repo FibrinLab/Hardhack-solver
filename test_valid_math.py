@@ -9,12 +9,8 @@ import urllib.request
 import json
 import numpy as np
 
-try:
-    import ttnn
-    import torch
-except:
-    print("ERROR: ttnn not available. Install it first.", file=sys.stderr)
-    sys.exit(1)
+# We'll use CPU matmul to ensure correctness
+# (TTNN float32 conversion loses precision)
 
 try:
     import base58
@@ -50,24 +46,14 @@ def submit_solution(solution: bytes) -> dict:
         return {"error": str(e)}
 
 def main():
-    print("Initializing TTNN GPU...", file=sys.stderr)
-    device = ttnn.open_device(device_id=0)
-    print("GPU ready", file=sys.stderr)
-    
     # Fetch seed + matrices
     print("\nFetching seed and matrices...", file=sys.stderr)
     seed, A, B = fetch_seed_with_matrices()
     print(f"Seed: {seed[:20].hex()}...", file=sys.stderr)
     
-    # Compute C on GPU
-    print("Computing C on GPU...", file=sys.stderr)
-    A_t = torch.from_numpy(A.astype(np.float32)).unsqueeze(0)
-    B_t = torch.from_numpy(B.astype(np.float32)).unsqueeze(0)
-    A_tt = ttnn.from_torch(A_t, device=device, layout=ttnn.TILE_LAYOUT)
-    B_tt = ttnn.from_torch(B_t, device=device, layout=ttnn.TILE_LAYOUT)
-    C_tt = ttnn.matmul(A_tt, B_tt)
-    C_t = ttnn.to_torch(C_tt)
-    C = C_t.squeeze(0).numpy().astype(np.int32)
+    # Compute C on CPU (correct int32 math)
+    print("Computing C with correct int32 math...", file=sys.stderr)
+    C = np.matmul(A.astype(np.int32), B.astype(np.int32))
     C_bytes = C.astype('<i4').tobytes()
     print(f"C computed. Shape: {C.shape}", file=sys.stderr)
     
@@ -128,8 +114,6 @@ def main():
     print("\n=== CONCLUSION ===")
     print("If ANY test shows valid_math=true (except test 1),")
     print("we can modify that part of the seed for high H/s!")
-    
-    ttnn.close_device(device)
 
 if __name__ == "__main__":
     main()
