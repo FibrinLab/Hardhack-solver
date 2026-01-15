@@ -149,15 +149,41 @@ def main():
         global _TTNN_DEVICE
         _TTNN_DEVICE = ttnn.open_device(device_id=0)
 
+        # GPU path must stay single-process (TTNN device handle not shareable)
+        while nonce < args.iterations:
+            n, bits, _ = _process_nonce_gpu(nonce)
+            total_hashes += 1
+            if bits > best_bits:
+                best_bits = bits
+                elapsed = time.time() - start
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"NEW BEST: {bits} bits @ nonce {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
+
+            if bits >= args.difficulty:
+                elapsed = time.time() - start
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"SOLUTION FOUND @ {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
+                ttnn.close_device(_TTNN_DEVICE)
+                return
+
+            nonce += 1
+            now = time.time()
+            if now - last_report >= 1.0:
+                elapsed = now - start
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+                last_report = now
+
+        ttnn.close_device(_TTNN_DEVICE)
+        return
+
+    # CPU multiprocessing path
     with ProcessPoolExecutor(
         max_workers=args.workers, initializer=_init_worker, initargs=(seed, args.difficulty)
     ) as executor:
         while nonce < args.iterations:
             batch = list(range(nonce, min(nonce + args.workers * 20, args.iterations)))
-            if args.gpu:
-                futures = {executor.submit(_process_nonce_gpu, n): n for n in batch}
-            else:
-                futures = {executor.submit(_process_nonce, n): n for n in batch}
+            futures = {executor.submit(_process_nonce, n): n for n in batch}
 
             for future in as_completed(futures):
                 n, bits, _ = future.result()
@@ -172,21 +198,16 @@ def main():
                     elapsed = time.time() - start
                     rate = total_hashes / elapsed if elapsed > 0 else 0
                     print(f"SOLUTION FOUND @ {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                    if args.gpu and _HAS_TTNN:
-                        ttnn.close_device(_TTNN_DEVICE)
                     return
 
             nonce += len(batch)
 
             now = time.time()
             if now - last_report >= 1.0:
-                elapsed = now - start
+                elapsed = time.time() - start
                 rate = total_hashes / elapsed if elapsed > 0 else 0
                 print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
                 last_report = now
-
-    if args.gpu and _HAS_TTNN:
-        ttnn.close_device(_TTNN_DEVICE)
 
 
 if __name__ == "__main__":
