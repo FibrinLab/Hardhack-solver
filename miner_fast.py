@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HardHack Fast Miner - TTNN GPU accelerated with correct math
+HardHack GPU Miner - TTNN accelerated, correct math, maximum speed
 """
 
 import os
@@ -14,27 +14,21 @@ import json
 import numpy as np
 
 # Import blake3
-try:
-    import blake3
-    def blake3_hash(data: bytes) -> bytes:
-        return blake3.blake3(data).digest()
-    def blake3_xof(data: bytes, length: int) -> bytes:
-        return blake3.blake3(data).digest(length=length)
-except ImportError:
-    print("Error: blake3 required", file=sys.stderr)
-    sys.exit(1)
+import blake3
 
-# Try TTNN
-try:
-    import ttnn
-    import torch
-    HAS_TTNN = True
-except ImportError:
-    HAS_TTNN = False
-    print("TTNN not available, using CPU", file=sys.stderr)
+def blake3_hash(data: bytes) -> bytes:
+    return blake3.blake3(data).digest()
+
+def blake3_xof(data: bytes, length: int) -> bytes:
+    return blake3.blake3(data).digest(length=length)
+
+# TTNN is REQUIRED
+import ttnn
+import torch
 
 RPC_URL = "https://testnet-rpc.ama.one"
 M, K, N = 16, 50240, 16
+XOF_SIZE = M * K + K * N
 
 
 def fetch_seed() -> bytes:
@@ -65,114 +59,111 @@ def check_difficulty(hash_bytes: bytes, difficulty_bits: int) -> int:
     return 256 - hash_int.bit_length()
 
 
-def matmul_ttnn(A: np.ndarray, B: np.ndarray, device) -> np.ndarray:
-    """TTNN GPU matmul for 16x50240 @ 50240x16"""
-    A_t = torch.from_numpy(A.astype(np.float32))
-    B_t = torch.from_numpy(B.astype(np.float32))
+class TTNNMiner:
+    def __init__(self, device_id=0):
+        print("Initializing TTNN GPU...", file=sys.stderr)
+        self.device = ttnn.open_device(device_id=device_id)
+        print(f"TTNN GPU ready on device {device_id}", file=sys.stderr)
     
-    A_tt = ttnn.from_torch(A_t, device=device, layout=ttnn.TILE_LAYOUT)
-    B_tt = ttnn.from_torch(B_t, device=device, layout=ttnn.TILE_LAYOUT)
+    def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
+        """GPU matmul: (16x50240) @ (50240x16) = (16x16)"""
+        A_t = torch.from_numpy(A.astype(np.float32))
+        B_t = torch.from_numpy(B.astype(np.float32))
+        
+        A_tt = ttnn.from_torch(A_t, device=self.device, layout=ttnn.TILE_LAYOUT)
+        B_tt = ttnn.from_torch(B_t, device=self.device, layout=ttnn.TILE_LAYOUT)
+        
+        C_tt = ttnn.matmul(A_tt, B_tt)
+        C_t = ttnn.to_torch(C_tt)
+        
+        return C_t.numpy().astype(np.int32)
     
-    C_tt = ttnn.matmul(A_tt, B_tt)
-    C_t = ttnn.to_torch(C_tt)
-    
-    return C_t.numpy().astype(np.int32)
-
-
-def mine(seed: bytes, difficulty: int, device, max_iterations: int = 10000000):
-    best_bits = 0
-    best_solution = None
-    total_hashes = 0
-    start_time = time.time()
-    
-    xof_size = M * K + K * N
-    seed_arr = bytearray(seed)
-    
-    for nonce in range(max_iterations):
-        # Update nonce
-        struct.pack_into('<Q', seed_arr, 228, nonce)
-        current_seed = bytes(seed_arr)
+    def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
+        best_bits = 0
+        best_solution = None
+        total_hashes = 0
+        start_time = time.time()
         
-        # Generate matrices via XOF
-        xof_data = blake3_xof(current_seed, xof_size)
+        seed_arr = bytearray(seed)
         
-        A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K).astype(np.int32)
-        B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N).astype(np.int32)
-        
-        # Matmul - use TTNN if available
-        if device is not None:
-            C = matmul_ttnn(A, B, device)
-        else:
-            C = np.dot(A, B)
-        
-        # Build and hash solution
-        solution = current_seed + C.astype('<i4').tobytes()
-        solution_hash = blake3_hash(solution)
-        leading_zeros = check_difficulty(solution_hash, difficulty)
-        
-        if leading_zeros > best_bits:
-            best_bits = leading_zeros
-            best_solution = solution
-            print(f"Best: {leading_zeros} bits @ nonce {nonce}", file=sys.stderr)
+        for nonce in range(max_iterations):
+            # Update nonce in seed
+            struct.pack_into('<Q', seed_arr, 228, nonce)
+            current_seed = bytes(seed_arr)
             
-            if leading_zeros >= difficulty:
+            # Generate matrices via BLAKE3 XOF
+            xof_data = blake3_xof(current_seed, XOF_SIZE)
+            
+            A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K)
+            B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N)
+            
+            # GPU MATMUL
+            C = self.matmul(A, B)
+            
+            # Build solution and hash
+            solution = current_seed + C.astype('<i4').tobytes()
+            solution_hash = blake3_hash(solution)
+            leading_zeros = check_difficulty(solution_hash, difficulty)
+            
+            total_hashes += 1
+            
+            if leading_zeros > best_bits:
+                best_bits = leading_zeros
+                best_solution = solution
                 elapsed = time.time() - start_time
                 rate = total_hashes / elapsed if elapsed > 0 else 0
-                return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce}
+                print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
+                
+                if leading_zeros >= difficulty:
+                    print(f"SOLUTION FOUND!", file=sys.stderr)
+                    return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce, "bits": leading_zeros}
+            
+            if total_hashes % 1000 == 0:
+                elapsed = time.time() - start_time
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
         
-        total_hashes += 1
-        if total_hashes % 100 == 0:
-            elapsed = time.time() - start_time
-            rate = total_hashes / elapsed if elapsed > 0 else 0
-            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits}", file=sys.stderr)
+        return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
     
-    return {"success": False, "best_bits": best_bits}
+    def close(self):
+        ttnn.close_device(self.device)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--iterations", type=int, default=10000000)
+    parser.add_argument("--iterations", type=int, default=100000000)
     args = parser.parse_args()
     
-    # Init TTNN
-    device = None
-    if HAS_TTNN:
-        try:
-            device = ttnn.open_device(device_id=0)
-            print("Using TTNN GPU", file=sys.stderr)
-        except Exception as e:
-            print(f"TTNN init failed: {e}", file=sys.stderr)
-    
+    # Install base58 if needed
     try:
         import base58
     except:
         os.system("pip3 install base58")
         import base58
     
-    while True:
-        try:
+    # Initialize GPU miner
+    miner = TTNNMiner(device_id=0)
+    
+    try:
+        while True:
             seed = fetch_seed()
             difficulty = fetch_difficulty()
-            print(f"Seed: {len(seed)} bytes, Difficulty: {difficulty}", file=sys.stderr)
+            print(f"Seed: {len(seed)} bytes, Difficulty: {difficulty} bits", file=sys.stderr)
             
-            result = mine(seed, difficulty, device, args.iterations)
+            result = miner.mine(seed, difficulty, args.iterations)
             
             if result["success"]:
-                print("Submitting...", file=sys.stderr)
+                print("Submitting solution...", file=sys.stderr)
                 val = submit_solution(result["solution"])
-                print(f"Result: {val}", file=sys.stderr)
+                print(f"Validation: {val}", file=sys.stderr)
             
             if not args.loop:
                 break
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            time.sleep(5)
-    
-    if device:
-        ttnn.close_device(device)
+    except KeyboardInterrupt:
+        print("\nStopped", file=sys.stderr)
+    finally:
+        miner.close()
 
 
 if __name__ == "__main__":

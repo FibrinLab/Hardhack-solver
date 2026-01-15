@@ -135,7 +135,7 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     Fast mining with OpenBLAS-accelerated matmul.
     Uses multiprocessing for parallel hashing.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     import multiprocessing
     
     best_bits = 0
@@ -191,7 +191,7 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     nonce = 1
     
     while nonce < max_iterations:
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
             futures = {executor.submit(process_nonce, n): n for n in range(nonce, min(nonce + batch_size, max_iterations))}
             
             for future in as_completed(futures):
