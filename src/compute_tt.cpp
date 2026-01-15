@@ -4,6 +4,7 @@
 #include <algorithm>
 
 #ifdef ENABLE_TT
+#if __has_include(<tt_stl/span.hpp>)
 #include <tt_stl/span.hpp>
 // host_api.hpp uses stl::Span inside tt::tt_metal namespace
 namespace tt {
@@ -14,6 +15,7 @@ namespace tt_metal {
     }
 }
 }
+#endif
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/command_queue.hpp>
