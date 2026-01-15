@@ -114,7 +114,9 @@ def mine(seed_hex: str, difficulty: int, iterations: int, use_ttnn: bool = True)
     device = None
     if use_ttnn and HAS_TTNN:
         try:
-            device = ttnn.open_device(device_id=0)
+            # Try with explicit dispatch mode
+            os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
+            device = ttnn.open_device(device_id=0, l1_small_size=16384)
             print("Using TTNN GPU acceleration", file=sys.stderr)
         except Exception as e:
             print(f"Failed to open TTNN device: {e}, falling back to CPU", file=sys.stderr)
