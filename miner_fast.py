@@ -34,9 +34,26 @@ XOF_SIZE = M * K + K * N
 
 
 def fetch_seed() -> bytes:
+    """Fetch just the seed"""
     req = urllib.request.Request(f"{RPC_URL}/api/upow/seed")
     with urllib.request.urlopen(req, timeout=10) as resp:
         return resp.read()
+
+def fetch_seed_with_matrices() -> tuple:
+    """Fetch seed + pre-computed matrices from server - FAST!"""
+    req = urllib.request.Request(f"{RPC_URL}/api/upow/seed_with_matrix_a_b")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read()
+    
+    # Format: seed (240 bytes) + matrix_a_b (16*50240 + 50240*16 bytes)
+    seed = data[:240]
+    matrix_data = data[240:]
+    
+    a_size = M * K  # 16 * 50240
+    A = np.frombuffer(matrix_data[:a_size], dtype=np.uint8).reshape(M, K)
+    B = np.frombuffer(matrix_data[a_size:], dtype=np.uint8).astype(np.int8).reshape(K, N)
+    
+    return seed, A, B
 
 
 def fetch_difficulty() -> int:
@@ -175,6 +192,52 @@ class TTNNMiner:
 
         return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
     
+    def mine_fast(self, seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int, max_iterations: int = 100000000):
+        """
+        FAST mining - matrices pre-computed by server, just vary nonce and hash
+        """
+        best_bits = 0
+        best_solution = None
+        total_hashes = 0
+        start_time = time.time()
+        
+        # Compute C once using GPU
+        print("Computing matmul...", file=sys.stderr)
+        C = self.matmul(A, B)
+        C_bytes = C.astype('<i4').tobytes()
+        print(f"C computed. Shape: {C.shape}", file=sys.stderr)
+        
+        seed_arr = bytearray(seed)
+        
+        for nonce in range(max_iterations):
+            # Update nonce
+            struct.pack_into('<Q', seed_arr, 228, nonce)
+            
+            # Hash solution (seed with nonce + C)
+            solution = bytes(seed_arr) + C_bytes
+            solution_hash = blake3_hash(solution)
+            leading_zeros = check_difficulty(solution_hash, difficulty)
+            
+            total_hashes += 1
+            
+            if leading_zeros > best_bits:
+                best_bits = leading_zeros
+                best_solution = solution
+                elapsed = time.time() - start_time
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"NEW BEST: {leading_zeros} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
+                
+                if leading_zeros >= difficulty:
+                    print("SOLUTION FOUND!", file=sys.stderr)
+                    return {"success": True, "solution": best_solution, "rate": rate, "nonce": nonce, "bits": leading_zeros}
+            
+            if total_hashes % 100000 == 0:
+                elapsed = time.time() - start_time
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+        
+        return {"success": False, "best_bits": best_bits, "total_hashes": total_hashes}
+    
     def close(self):
         ttnn.close_device(self.device)
 
@@ -197,11 +260,13 @@ def main():
     
     try:
         while True:
-            seed = fetch_seed()
+            # Fetch seed with pre-computed matrices - no XOF needed!
+            print("Fetching seed with matrices...", file=sys.stderr)
+            seed, A, B = fetch_seed_with_matrices()
             difficulty = fetch_difficulty()
             print(f"Seed: {len(seed)} bytes, Difficulty: {difficulty} bits", file=sys.stderr)
             
-            result = miner.mine(seed, difficulty, args.iterations)
+            result = miner.mine_fast(seed, A, B, difficulty, args.iterations)
             
             if result["success"]:
                 print("Submitting solution...", file=sys.stderr)
