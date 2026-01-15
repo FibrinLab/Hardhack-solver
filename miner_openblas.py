@@ -11,6 +11,7 @@ import struct
 import argparse
 import urllib.request
 import json
+import math
 
 # Use OpenBLAS via NumPy
 import numpy as np
@@ -349,12 +350,139 @@ def mine_gpu_fast(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     }
 
 
+def _percentile(sorted_vals, pct):
+    if not sorted_vals:
+        return None
+    k = (len(sorted_vals) - 1) * pct
+    f = math.floor(k)
+    c = math.ceil(k)
+    if f == c:
+        return sorted_vals[int(k)]
+    d0 = sorted_vals[int(f)] * (c - k)
+    d1 = sorted_vals[int(c)] * (k - f)
+    return d0 + d1
+
+
+def _benchmark_once(seed: bytes, nonce: int, use_gpu: bool):
+    local_seed = bytearray(seed)
+    struct.pack_into('<Q', local_seed, 228, nonce)
+    local_seed = bytes(local_seed)
+
+    t0 = time.time()
+    xof_data = blake3_xof(local_seed, _XOF_SIZE)
+    t1 = time.time()
+
+    A = np.frombuffer(xof_data[:_M*_K], dtype=np.uint8).reshape(_M, _K)
+    B = np.frombuffer(xof_data[_M*_K:], dtype=np.int8).reshape(_K, _N)
+
+    if use_gpu:
+        A_t = torch.from_numpy(A.astype(np.float32))
+        B_t = torch.from_numpy(B.astype(np.float32))
+        A_tt = ttnn.from_torch(A_t, device=_TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
+        B_tt = ttnn.from_torch(B_t, device=_TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
+        C_tt = ttnn.matmul(A_tt, B_tt)
+        C_t = ttnn.to_torch(C_tt)
+        C = C_t.numpy().astype(np.int32)
+    else:
+        C = np.dot(A.astype(np.int32), B.astype(np.int32))
+
+    t2 = time.time()
+
+    solution = local_seed + C.astype('<i4').tobytes()
+    _ = blake3_hash(solution)
+    t3 = time.time()
+
+    return {
+        "seed": local_seed,
+        "C": C,
+        "xof_ms": (t1 - t0) * 1000.0,
+        "matmul_ms": (t2 - t1) * 1000.0,
+        "hash_ms": (t3 - t2) * 1000.0,
+        "total_ms": (t3 - t0) * 1000.0,
+    }
+
+
+def report_benchmarks(seed: bytes, runs: int, use_gpu: bool):
+    samples = []
+    for i in range(runs):
+        samples.append(_benchmark_once(seed, i, use_gpu))
+
+    xof_ms = sorted([s["xof_ms"] for s in samples])
+    matmul_ms = sorted([s["matmul_ms"] for s in samples])
+    hash_ms = sorted([s["hash_ms"] for s in samples])
+    total_ms = sorted([s["total_ms"] for s in samples])
+
+    avg_total_s = sum(total_ms) / 1000.0 / len(total_ms)
+    solves_per_sec = (1.0 / avg_total_s) if avg_total_s > 0 else 0
+
+    # Compute throughput (GOPS) for matmul
+    ops = 2 * _M * _K * _N
+    avg_matmul_s = (sum(matmul_ms) / len(matmul_ms)) / 1000.0
+    gops = (ops / 1e9) / avg_matmul_s if avg_matmul_s > 0 else 0
+
+    # Bandwidth estimate: bytes of A+B+C per matmul
+    bytes_moved = (_M * _K) + (_K * _N) + (_M * _N * 4)
+    gbps = (bytes_moved / 1e9) / avg_matmul_s if avg_matmul_s > 0 else 0
+
+    # Correctness check (GPU vs CPU)
+    error = None
+    determinism = None
+    if use_gpu:
+        cpu_ref = _benchmark_once(seed, 0, False)["C"].astype(np.int64)
+        gpu_ref = samples[0]["C"].astype(np.int64)
+        diff = gpu_ref - cpu_ref
+        max_abs = int(np.max(np.abs(diff)))
+        mean_abs = float(np.mean(np.abs(diff)))
+        rmse = float(np.sqrt(np.mean(diff ** 2)))
+        error = {
+            "max_abs_error": max_abs,
+            "mean_abs_error": mean_abs,
+            "rmse": rmse
+        }
+        # Determinism: run same input twice
+        gpu_ref2 = _benchmark_once(seed, 0, True)["C"]
+        determinism = bool(np.array_equal(gpu_ref, gpu_ref2))
+    else:
+        determinism = True
+
+    report = {
+        "mode": "gpu" if use_gpu else "cpu",
+        "runs": runs,
+        "latency_ms": {
+            "total": {"p50": _percentile(total_ms, 0.50), "p95": _percentile(total_ms, 0.95)},
+            "xof": {"p50": _percentile(xof_ms, 0.50), "p95": _percentile(xof_ms, 0.95)},
+            "matmul": {"p50": _percentile(matmul_ms, 0.50), "p95": _percentile(matmul_ms, 0.95)},
+            "hash": {"p50": _percentile(hash_ms, 0.50), "p95": _percentile(hash_ms, 0.95)},
+        },
+        "throughput": {
+            "solves_per_sec": solves_per_sec,
+            "gops": gops
+        },
+        "bandwidth": {
+            "gbps": gbps,
+            "bytes_per_solve": bytes_moved
+        },
+        "correctness": {
+            "deterministic": determinism,
+            "error": error
+        },
+        "workload": {
+            "shape": f"{_M}x{_K}x{_N}",
+            "dtype": "u8/i8->i32"
+        }
+    }
+
+    print(json.dumps(report, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="HardHack OpenBLAS Miner")
     parser.add_argument("--iterations", type=int, default=10000000, help="Max iterations")
     parser.add_argument("--batch-size", type=int, default=10000, help="Batch size for progress updates")
     parser.add_argument("--loop", action="store_true", help="Run continuously")
     parser.add_argument("--gpu", action="store_true", help="Use TTNN GPU (fast, may be invalid)")
+    parser.add_argument("--report", action="store_true", help="Output JSON performance report and exit")
+    parser.add_argument("--report-runs", type=int, default=20, help="Number of runs for report")
     args = parser.parse_args()
     
     # Check OpenBLAS and tune threading
@@ -381,6 +509,19 @@ def main():
             difficulty = fetch_difficulty()
             print(f"Difficulty: {difficulty} bits", file=sys.stderr)
             
+            # Report mode: run benchmarks and exit
+            if args.report:
+                if args.gpu:
+                    if not _HAS_TTNN:
+                        raise RuntimeError("TTNN not available for GPU report mode")
+                    global _TTNN_DEVICE
+                    _TTNN_DEVICE = ttnn.open_device(device_id=0)
+                    report_benchmarks(seed, args.report_runs, True)
+                    ttnn.close_device(_TTNN_DEVICE)
+                else:
+                    report_benchmarks(seed, args.report_runs, False)
+                return
+
             # First test validation with original seed
             print("Testing validation...", file=sys.stderr)
             test_validation(seed)
