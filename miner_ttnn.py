@@ -174,7 +174,8 @@ def mine(seed_hex: str, difficulty: int, iterations: int, use_ttnn: bool = True)
                 return result
             
             # Track best difficulty found
-            leading_zeros = 256 - solution_hash.bit_length() if int.from_bytes(solution_hash, 'big') > 0 else 256
+            hash_int = int.from_bytes(solution_hash, 'big')
+            leading_zeros = 256 - hash_int.bit_length() if hash_int > 0 else 256
             if leading_zeros > best_difficulty:
                 best_difficulty = leading_zeros
             
