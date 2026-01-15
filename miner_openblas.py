@@ -97,18 +97,47 @@ def build_solution(seed: bytes, C: np.ndarray) -> bytes:
     return seed + C_bytes
 
 
+def test_validation(seed: bytes):
+    """Test if our solution format is correct by validating immediately"""
+    import base58
+    
+    print(f"Testing with seed length: {len(seed)}", file=sys.stderr)
+    
+    # Generate matrices
+    A, B = seed_to_matrices(seed)
+    print(f"A shape: {A.shape}, B shape: {B.shape}", file=sys.stderr)
+    print(f"A dtype: {A.dtype}, B dtype: {B.dtype}", file=sys.stderr)
+    
+    # Compute C
+    C = np.dot(A, B)
+    print(f"C shape: {C.shape}, C dtype: {C.dtype}", file=sys.stderr)
+    print(f"C[0,0]: {C[0,0]}, C[0,1]: {C[0,1]}", file=sys.stderr)
+    
+    # Build solution
+    C_bytes = C.astype('<i4').tobytes()
+    solution = seed + C_bytes
+    print(f"Solution length: {len(solution)} (expected 1264)", file=sys.stderr)
+    
+    # Submit for validation
+    sol_b58 = base58.b58encode(solution).decode()
+    print(f"Submitting to validate...", file=sys.stderr)
+    
+    req = urllib.request.Request(f"{RPC_URL}/api/upow/validate/{sol_b58}")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        result = json.loads(resp.read())
+    
+    print(f"Validation result: {result}", file=sys.stderr)
+    return result
+
+
 def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     """
     Mine with correct matrix recomputation per nonce.
-    Each nonce changes the seed, which changes A, B, and C.
     """
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
-    
-    # Constants
-    M, K, N = 16, 50240, 16
     
     seed_arr = bytearray(seed)
     nonce = 0
@@ -129,6 +158,18 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
         solution_hash = blake3_hash(solution)
         
         leading_zeros = check_difficulty(solution_hash, difficulty)
+        
+        # Validate every solution to debug
+        if nonce == 0:
+            import base58
+            sol_b58 = base58.b58encode(solution).decode()
+            req = urllib.request.Request(f"{RPC_URL}/api/upow/validate/{sol_b58}")
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    val_result = json.loads(resp.read())
+                print(f"Nonce 0 validation: {val_result}", file=sys.stderr)
+            except Exception as e:
+                print(f"Validation error: {e}", file=sys.stderr)
         
         if leading_zeros > best_bits:
             best_bits = leading_zeros
@@ -151,7 +192,6 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
         nonce += 1
         total_hashes += 1
         
-        # Progress every 10 hashes (will be slow due to XOF + matmul)
         if total_hashes % 10 == 0:
             elapsed = time.time() - start_time
             rate = total_hashes / elapsed if elapsed > 0 else 0
@@ -190,6 +230,10 @@ def main():
             
             difficulty = fetch_difficulty()
             print(f"Difficulty: {difficulty} bits", file=sys.stderr)
+            
+            # First test validation with original seed
+            print("Testing validation...", file=sys.stderr)
+            test_validation(seed)
             
             # Mine (matrices generated per-nonce inside)
             print("Mining...", file=sys.stderr)
