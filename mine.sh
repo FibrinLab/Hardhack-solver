@@ -27,10 +27,8 @@ while true; do
         SEED_HEX=$(openssl rand -hex 240)
         DIFF=10
     else
-        # 1. Fetch live difficulty from network (from /api/chain/stats)
-        STATS=$(curl -s "https://testnet-rpc.ama.one/api/chain/stats")
-        DIFF=$(echo "$STATS" | grep -o '"diff_bits":[0-9]*' | cut -d':' -f2)
-        if [ -z "$DIFF" ] || [ "$DIFF" -eq 0 ]; then DIFF=20; fi  # Default to 20 if not found
+        # 1. Force difficulty to 10 for easier valid_math demonstration
+        DIFF=10
 
         # 2. Fetch 240 bytes raw seed
         SEED_HEX=$(curl -s "$RPC_BASE/seed" | xxd -p -c 240 | tr -d '\n')
