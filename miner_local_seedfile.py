@@ -22,6 +22,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 
+# Optional TTNN GPU (float32, fast but inexact)
+try:
+    import ttnn
+    import torch
+    _HAS_TTNN = True
+except Exception:
+    _HAS_TTNN = False
+
 try:
     import blake3
 except ImportError:
@@ -64,6 +72,32 @@ def _process_nonce(nonce: int):
     return nonce, bits, solution
 
 
+def _process_nonce_gpu(nonce: int):
+    if not _HAS_TTNN:
+        raise RuntimeError("TTNN not available for GPU mode")
+    local_seed = bytearray(_BASE_SEED)
+    struct.pack_into("<Q", local_seed, 228, nonce)
+    local_seed = bytes(local_seed)
+
+    xof_data = blake3.blake3(local_seed).digest(length=XOF_SIZE)
+    A = np.frombuffer(xof_data[: M * K], dtype=np.uint8).reshape(M, K)
+    B = np.frombuffer(xof_data[M * K :], dtype=np.int8).reshape(K, N)
+
+    # TTNN float32 matmul (fast, may be inaccurate)
+    A_t = torch.from_numpy(A.astype(np.float32))
+    B_t = torch.from_numpy(B.astype(np.float32))
+    A_tt = ttnn.from_torch(A_t, device=_TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
+    B_tt = ttnn.from_torch(B_t, device=_TTNN_DEVICE, layout=ttnn.TILE_LAYOUT)
+    C_tt = ttnn.matmul(A_tt, B_tt)
+    C_t = ttnn.to_torch(C_tt)
+    C = C_t.numpy().astype(np.int32)
+
+    solution = local_seed + C.astype("<i4").tobytes()
+    h = blake3.blake3(solution).digest()
+    bits = _check_difficulty(h, _DIFF)
+    return nonce, bits, solution
+
+
 def _build_seed_from_json(data: dict) -> bytes:
     epoch_le = bytes.fromhex(data["epoch_le"])
     segment_vr_hash = bytes.fromhex(data["segment_vr_hash"])
@@ -89,6 +123,7 @@ def main():
     parser.add_argument("--difficulty", type=int, default=10, help="Difficulty bits")
     parser.add_argument("--iterations", type=int, default=10000000, help="Max iterations")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    parser.add_argument("--gpu", action="store_true", help="Use TTNN GPU (fast, may be invalid)")
     args = parser.parse_args()
 
     with open(args.seed_json, "r") as f:
@@ -105,12 +140,22 @@ def main():
     last_report = start
     nonce = 0
 
+    if args.gpu:
+        if not _HAS_TTNN:
+            raise RuntimeError("TTNN not available for GPU mode")
+        print("[!] GPU mode prioritizes speed over accuracy; valid_math may be false", file=sys.stderr)
+        global _TTNN_DEVICE
+        _TTNN_DEVICE = ttnn.open_device(device_id=0)
+
     with ProcessPoolExecutor(
         max_workers=args.workers, initializer=_init_worker, initargs=(seed, args.difficulty)
     ) as executor:
         while nonce < args.iterations:
             batch = list(range(nonce, min(nonce + args.workers * 20, args.iterations)))
-            futures = {executor.submit(_process_nonce, n): n for n in batch}
+            if args.gpu:
+                futures = {executor.submit(_process_nonce_gpu, n): n for n in batch}
+            else:
+                futures = {executor.submit(_process_nonce, n): n for n in batch}
 
             for future in as_completed(futures):
                 n, bits, _ = future.result()
@@ -125,6 +170,8 @@ def main():
                     elapsed = time.time() - start
                     rate = total_hashes / elapsed if elapsed > 0 else 0
                     print(f"SOLUTION FOUND @ {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
+                    if args.gpu and _HAS_TTNN:
+                        ttnn.close_device(_TTNN_DEVICE)
                     return
 
             nonce += len(batch)
@@ -135,6 +182,9 @@ def main():
                 rate = total_hashes / elapsed if elapsed > 0 else 0
                 print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
                 last_report = now
+
+    if args.gpu and _HAS_TTNN:
+        ttnn.close_device(_TTNN_DEVICE)
 
 
 if __name__ == "__main__":
