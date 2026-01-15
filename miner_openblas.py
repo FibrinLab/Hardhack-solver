@@ -93,6 +93,11 @@ _XOF_SIZE = _M * _K + _K * _N
 _BASE_SEED = None
 _DIFFICULTY = None
 
+def _init_worker(seed: bytes, difficulty: int):
+    global _BASE_SEED, _DIFFICULTY
+    _BASE_SEED = seed
+    _DIFFICULTY = difficulty
+
 def _process_nonce(nonce):
     """Process single nonce - must be global for multiprocessing"""
     local_seed = bytearray(_BASE_SEED)
@@ -167,9 +172,7 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import multiprocessing
     
-    # Set globals for worker processes
-    _BASE_SEED = seed
-    _DIFFICULTY = difficulty
+    # Set globals for worker processes via initializer
     
     best_bits = 0
     best_solution = None
@@ -192,27 +195,27 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     except Exception as e:
         print(f"Validation error: {e}", file=sys.stderr)
     
-    # Parallel mining
+    # Parallel mining (reuse pool to avoid heavy respawn costs)
     num_workers = multiprocessing.cpu_count()
-    batch_size = num_workers * 10  # Smaller batch for more frequent updates
+    batch_size = num_workers * 50
     nonce = 1
     last_report = start_time
-    
-    while nonce < max_iterations:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+
+    with ProcessPoolExecutor(max_workers=num_workers, initializer=_init_worker, initargs=(seed, difficulty)) as executor:
+        while nonce < max_iterations:
             futures = {executor.submit(_process_nonce, n): n for n in range(nonce, min(nonce + batch_size, max_iterations))}
-            
+
             for future in as_completed(futures):
                 n, bits, sol = future.result()
                 total_hashes += 1
-                
+
                 if bits > best_bits:
                     best_bits = bits
                     best_solution = sol
                     elapsed = time.time() - start_time
                     rate = total_hashes / elapsed if elapsed > 0 else 0
                     print(f"NEW BEST: {bits} bits @ nonce {n}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                    
+
                     if bits >= difficulty:
                         print(f"SOLUTION FOUND!", file=sys.stderr)
                         return {
@@ -223,16 +226,16 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
                             "hash_rate": rate,
                             "total_hashes": total_hashes
                         }
-        
-        nonce += batch_size
-        
-        # Report every second
-        now = time.time()
-        if now - last_report >= 1.0:
-            elapsed = now - start_time
-            rate = total_hashes / elapsed if elapsed > 0 else 0
-            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
-            last_report = now
+
+            nonce += batch_size
+
+            # Report every second
+            now = time.time()
+            if now - last_report >= 1.0:
+                elapsed = now - start_time
+                rate = total_hashes / elapsed if elapsed > 0 else 0
+                print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+                last_report = now
     
     return {
         "success": False,
@@ -248,7 +251,11 @@ def main():
     parser.add_argument("--loop", action="store_true", help="Run continuously")
     args = parser.parse_args()
     
-    # Check OpenBLAS
+    # Check OpenBLAS and tune threading
+    os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 1))
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(os.cpu_count() or 1))
+    os.environ.setdefault("GOTO_NUM_THREADS", str(os.cpu_count() or 1))
+    os.environ.setdefault("MKL_NUM_THREADS", str(os.cpu_count() or 1))
     print(f"NumPy config: {np.__config__.show()}", file=sys.stderr)
     
     try:

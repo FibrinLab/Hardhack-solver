@@ -7,10 +7,16 @@ API_KEY="your_api_key_here"
 MERKLE_PROVER_BINARY="./build/hardhack_merkle_prover"
 TREE_SIZE=${TREE_SIZE:-1024}
 
+ARCH=$(uname -m)
 echo "==============================================="
 echo "   CHALLENGE B: MERKLE PROOF ON RISC-V"
 echo "   Mode: $( [ "$LOCAL_TEST" = true ] && echo "LOCAL TEST" || echo "PRODUCTION" )"
+echo "   Arch: $ARCH"
 echo "==============================================="
+
+if [ "$ARCH" != "riscv64" ]; then
+    echo "[!] Warning: This binary should be built for RISC-V. Current arch: $ARCH"
+fi
 
 if [ ! -f "$MERKLE_PROVER_BINARY" ]; then 
     echo "[!] Error: Merkle prover binary not found. Build it first."

@@ -7,9 +7,14 @@ LOCAL_TEST=${LOCAL_TEST:-false}
 MINER_BINARY="./build/hardhack_miner"
 OUT_FILE="/tmp/miner_result.json"
 
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$(nproc 2>/dev/null || echo 4)}"
+export OMP_PROC_BIND="${OMP_PROC_BIND:-spread}"
+export OMP_PLACES="${OMP_PLACES:-cores}"
+
 echo "==============================================="
 echo "   AMADEUS HARD HACK: FINAL PRODUCTION MINER"
 echo "   Mode: $( [ "$LOCAL_TEST" = true ] && echo "LOCAL TEST" || echo "PRODUCTION" )"
+echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
 echo "==============================================="
 
 if [ ! -f "$MINER_BINARY" ]; then
