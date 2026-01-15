@@ -30,8 +30,16 @@ namespace tt_metal {
 #include <tt_metal/buffer.hpp>
 #include <tt_metal/constants.hpp>
 #include <tt_metal/bfloat16.hpp>
+#elif __has_include(<host_api.hpp>)
+// Older header layout: headers live directly in include path
+#include <host_api.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
+#include <buffer.hpp>
+#include <constants.hpp>
+#include <bfloat16.hpp>
 #else
-#error "TT-Metal headers not found (tt-metalium or tt_metal). Set TT_METAL_HOME/include path."
+#error "TT-Metal headers not found (tt-metalium/tt_metal/host_api.hpp or host_api.hpp). Check TT_METAL_HOME and include paths."
 #endif
 
 using namespace tt;
