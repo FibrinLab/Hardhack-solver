@@ -16,12 +16,23 @@ namespace tt_metal {
 }
 }
 #endif
+#if __has_include(<tt-metalium/host_api.hpp>)
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#elif __has_include(<tt_metal/host_api.hpp>)
+#include <tt_metal/host_api.hpp>
+#include <tt_metal/device.hpp>
+#include <tt_metal/command_queue.hpp>
+#include <tt_metal/buffer.hpp>
+#include <tt_metal/constants.hpp>
+#include <tt_metal/bfloat16.hpp>
+#else
+#error "TT-Metal headers not found (tt-metalium or tt_metal). Set TT_METAL_HOME/include path."
+#endif
 
 using namespace tt;
 using namespace tt::tt_metal;
