@@ -21,11 +21,36 @@ docker run -it --entrypoint ./merkle_prove.sh hardhack-miner
 ---
 
 ## 🏎️ Sub-Track A: The Miner (`mine.sh`)
-- **Engine**: NEON-optimized C++ Int8 MatMul ($16 \times 50240$).
-- **Logic**: Directly fetches seeds from `testnet-rpc.ama.one` and submits via Base58 GET.
+- **Engine**: C++ miner with OpenMP; exact int32 math (valid_math=true).
+- **Logic**: Fetches seed from `testnet-rpc.ama.one`, mines locally, submits via Base58.
+- **Note**: `mine.sh` currently **forces diffbits=6** for fast valid_math demo.
 - **Run Locally (No Docker)**:
 ```bash
 ./mine.sh
+```
+
+### CPU Python Miner (Exact, Valid Math)
+```bash
+python3 miner_openblas.py --loop
+```
+
+### GPU Python Miner (Fast, Inexact Math)
+This prioritizes speed over correctness (valid_math may be false):
+```bash
+python3 miner_openblas.py --gpu --loop
+```
+
+### JSON Performance Report
+```bash
+python3 miner_openblas.py --report --report-runs 50
+python3 miner_openblas.py --gpu --report --report-runs 50
+```
+
+### Local Seed Template Mining (No Network Fetch)
+Use a JSON template to generate local nonces:
+```bash
+python3 miner_local_seedfile.py --seed-json seed_template.json --difficulty 10 --workers 8
+python3 miner_local_seedfile.py --seed-json seed_template.json --difficulty 10 --gpu
 ```
 
 ## 🧩 Challenge B: Merkle Proof on RISC-V (`merkle_prove.sh`)
