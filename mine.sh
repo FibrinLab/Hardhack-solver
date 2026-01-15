@@ -27,8 +27,8 @@ while true; do
         SEED_HEX=$(openssl rand -hex 240)
         DIFF=10
     else
-        # 1. Force difficulty to 10 for easier valid_math demonstration
-        DIFF=10
+        # 1. Force difficulty to 6 for faster valid_math demonstration
+        DIFF=6
 
         # 2. Fetch 240 bytes raw seed
         SEED_HEX=$(curl -s "$RPC_BASE/seed" | xxd -p -c 240 | tr -d '\n')
