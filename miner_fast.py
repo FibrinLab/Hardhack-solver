@@ -289,10 +289,17 @@ def main():
             original_bits = check_difficulty(original_hash, difficulty)
             print(f"Original seed: {original_bits} bits", file=sys.stderr)
             
-            if original_bits >= difficulty:
-                print("SOLUTION FOUND with original seed!", file=sys.stderr)
+            # Always try submitting original to check valid_math
+            if original_bits >= 15:  # Submit if decent bits to see validation
+                print(f"Submitting original seed ({original_bits} bits)...", file=sys.stderr)
                 val = submit_solution(original_solution)
                 print(f"Validation: {val}", file=sys.stderr)
+                if val.get("valid") and val.get("valid_math"):
+                    print("SUCCESS!", file=sys.stderr)
+                    continue
+            
+            if original_bits >= difficulty:
+                continue  # Already submitted above
             else:
                 # Keep hashing with modified nonces to find good hash
                 # But when we find one, we'll need a new seed anyway
