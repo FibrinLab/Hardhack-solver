@@ -13,12 +13,12 @@ namespace tt_metal {
     }
 }
 }
-#include "tt_metal/api/tt-metalium/host_api.hpp"
-#include "tt_metal/api/tt-metalium/device.hpp"
-#include "tt_metal/api/tt-metalium/command_queue.hpp"
-#include "tt_metal/api/tt-metalium/buffer.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
