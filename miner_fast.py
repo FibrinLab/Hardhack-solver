@@ -77,7 +77,7 @@ class TTNNMiner:
         print("Initializing TTNN GPU...", file=sys.stderr)
         self.device = ttnn.open_device(device_id=device_id)
         self.num_workers = num_workers or multiprocessing.cpu_count()
-        self.batch_size = self.num_workers * 16  # Scale batch with workers
+        self.batch_size = self.num_workers * 256  # Large batch for OpenBLAS efficiency
         print(f"TTNN GPU ready. Workers: {self.num_workers}, Batch: {self.batch_size}", file=sys.stderr)
     
     def matmul(self, A: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -94,19 +94,22 @@ class TTNNMiner:
         return C_t.numpy().astype(np.int32)
     
     def matmul_batch(self, A_batch: np.ndarray, B_batch: np.ndarray) -> list:
-        """Batched GPU matmul using torch.bmm"""
+        """
+        Batched matmul using NumPy/OpenBLAS - highly optimized
+        Uses np.einsum or np.matmul with broadcasting
+        """
         batch = A_batch.shape[0]
         
-        # Convert to torch tensors with batch dimension
-        A_t = torch.from_numpy(A_batch.astype(np.float32))  # (batch, 16, 50240)
-        B_t = torch.from_numpy(B_batch.astype(np.float32))  # (batch, 50240, 16)
+        # Use numpy's optimized matmul (backed by OpenBLAS/MKL)
+        # np.matmul handles batch dimensions automatically
+        A = A_batch.astype(np.float64)  # float64 for precision
+        B = B_batch.astype(np.float64)
         
-        # Use torch batched matmul on CPU first, then send result
-        # Since TTNN may not support bmm directly, we use torch
-        C_t = torch.bmm(A_t, B_t)  # (batch, 16, 16)
+        # Batched matmul: (batch, 16, 50240) @ (batch, 50240, 16) = (batch, 16, 16)
+        C = np.matmul(A, B)
         
-        # Return as list of numpy arrays
-        return [C_t[i].numpy().astype(np.int32) for i in range(batch)]
+        # Return as list of int32 arrays
+        return [C[i].astype(np.int32) for i in range(batch)]
     
     def mine(self, seed: bytes, difficulty: int, max_iterations: int = 100000000):
         """
