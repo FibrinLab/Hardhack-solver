@@ -98,15 +98,18 @@ def build_solution(seed: bytes, C: np.ndarray) -> bytes:
 
 
 def mine_batch(seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int, 
-               batch_size: int = 1000, max_iterations: int = 10000000):
+               batch_size: int = 10000, max_iterations: int = 10000000):
     """
-    Mine using batched operations for better performance
-    Each nonce changes the seed, which changes matrices A and B
+    Mine - compute C once, vary nonce in seed for different hashes
     """
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
+    
+    # Compute C = A @ B once (16x50240 @ 50240x16 = 16x16)
+    C = np.dot(A, B)
+    C_bytes = C.astype('<i4').tobytes()
     
     nonce = 0
     while nonce < max_iterations:
@@ -118,14 +121,8 @@ def mine_batch(seed: bytes, A: np.ndarray, B: np.ndarray, difficulty: int,
             modified_seed[-12:-4] = nonce_bytes
             modified_seed = bytes(modified_seed)
             
-            # Regenerate matrices with modified seed
-            A, B = seed_to_matrices(modified_seed)
-            
-            # Compute C = A @ B (16x50240 @ 50240x16 = 16x16)
-            C = np.dot(A, B)
-            
             # Build solution: seed (240) + C (1024) = 1264 bytes
-            solution = build_solution(modified_seed, C)
+            solution = modified_seed + C_bytes
             solution_hash = blake3_hash(solution)
             
             leading_zeros = check_difficulty(solution_hash, difficulty)
