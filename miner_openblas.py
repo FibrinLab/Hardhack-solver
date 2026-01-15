@@ -133,28 +133,27 @@ def test_validation(seed: bytes):
 def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
     """
     Fast mining with OpenBLAS-accelerated matmul.
-    Uses multiprocessing for parallel hashing.
+    Sequential for accurate rate tracking.
     """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    import multiprocessing
-    
     best_bits = 0
     best_solution = None
     total_hashes = 0
     start_time = time.time()
+    last_report = start_time
     
     M, K, N = 16, 50240, 16
     xof_size = M * K + K * N
     
-    # Pre-allocate
-    seed_arr = bytearray(seed)
+    print(f"Starting mining with OpenBLAS...", file=sys.stderr)
+    print(f"Target difficulty: {difficulty} bits", file=sys.stderr)
     
-    def process_nonce(nonce):
+    for nonce in range(max_iterations):
+        # Modify seed with nonce
         local_seed = bytearray(seed)
         struct.pack_into('<Q', local_seed, 228, nonce)
         local_seed = bytes(local_seed)
         
-        # XOF + matrices
+        # XOF + matrices (this is the bottleneck)
         xof_data = blake3_xof(local_seed, xof_size)
         A = np.frombuffer(xof_data[:M*K], dtype=np.uint8).reshape(M, K).astype(np.int32)
         B = np.frombuffer(xof_data[M*K:], dtype=np.int8).reshape(K, N).astype(np.int32)
@@ -162,69 +161,48 @@ def mine_correct(seed: bytes, difficulty: int, max_iterations: int = 10000000):
         # OpenBLAS matmul
         C = np.dot(A, B)
         
-        # Solution
+        # Build solution and hash
         solution = local_seed + C.astype('<i4').tobytes()
         h = blake3_hash(solution)
         bits = check_difficulty(h, difficulty)
         
-        return nonce, bits, solution
-    
-    # Validate first one
-    nonce, bits, solution = process_nonce(0)
-    total_hashes += 1
-    best_bits = bits
-    best_solution = solution
-    
-    import base58
-    sol_b58 = base58.b58encode(solution).decode()
-    req = urllib.request.Request(f"{RPC_URL}/api/upow/validate/{sol_b58}")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            val_result = json.loads(resp.read())
-        print(f"Nonce 0 validation: {val_result}", file=sys.stderr)
-    except Exception as e:
-        print(f"Validation error: {e}", file=sys.stderr)
-    
-    # Parallel mining
-    num_workers = multiprocessing.cpu_count()
-    batch_size = num_workers * 100
-    nonce = 1
-    
-    while nonce < max_iterations:
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(process_nonce, n): n for n in range(nonce, min(nonce + batch_size, max_iterations))}
-            
-            for future in as_completed(futures):
-                n, bits, sol = future.result()
-                total_hashes += 1
-                
-                if bits > best_bits:
-                    best_bits = bits
-                    best_solution = sol
-                    print(f"New best: {bits} bits at nonce {n}", file=sys.stderr)
-                    
-                    if bits >= difficulty:
-                        elapsed = time.time() - start_time
-                        rate = total_hashes / elapsed if elapsed > 0 else 0
-                        print(f"FOUND! Nonce: {n}, Bits: {bits}, Rate: {rate:.1f} H/s", file=sys.stderr)
-                        return {
-                            "success": True,
-                            "nonce": n,
-                            "leading_zeros": bits,
-                            "solution": best_solution,
-                            "hash_rate": rate,
-                            "total_hashes": total_hashes
-                        }
+        total_hashes += 1
         
-        nonce += batch_size
-        elapsed = time.time() - start_time
-        rate = total_hashes / elapsed if elapsed > 0 else 0
-        print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+        if bits > best_bits:
+            best_bits = bits
+            best_solution = solution
+            elapsed = time.time() - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"NEW BEST: {bits} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
+        
+        if bits >= difficulty:
+            elapsed = time.time() - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"SOLUTION FOUND! {bits} bits @ nonce {nonce}, Rate: {rate:.1f} H/s", file=sys.stderr)
+            return {
+                "success": True,
+                "nonce": nonce,
+                "leading_zeros": bits,
+                "solution": best_solution,
+                "hash_rate": rate,
+                "total_hashes": total_hashes
+            }
+        
+        # Report progress every second
+        now = time.time()
+        if now - last_report >= 1.0:
+            elapsed = now - start_time
+            rate = total_hashes / elapsed if elapsed > 0 else 0
+            print(f"Hashes: {total_hashes}, Rate: {rate:.1f} H/s, Best: {best_bits} bits", file=sys.stderr)
+            last_report = now
     
+    elapsed = time.time() - start_time
+    rate = total_hashes / elapsed if elapsed > 0 else 0
     return {
         "success": False,
         "best_bits": best_bits,
-        "total_hashes": total_hashes
+        "total_hashes": total_hashes,
+        "hash_rate": rate
     }
 
 
@@ -254,10 +232,6 @@ def main():
             
             difficulty = fetch_difficulty()
             print(f"Difficulty: {difficulty} bits", file=sys.stderr)
-            
-            # First test validation with original seed
-            print("Testing validation...", file=sys.stderr)
-            test_validation(seed)
             
             # Mine (matrices generated per-nonce inside)
             print("Mining...", file=sys.stderr)
